@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>たいせんバトル</title>
+<style>
+  :root {
+    --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF;
+    --ink:#2b3a67; --paper:#F2F7FF;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--ink);
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:rgba(43,58,103,.45); color:#fff; text-align:center; padding:20px; }
+  #overlay h1 { font-size:30px; line-height:1.35; }
+  #overlay p { font-size:16px; opacity:.95; }
+  #btn { font-size:22px; font-weight:800; padding:14px 32px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  #btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+  .pop { position:absolute; font-weight:900; font-size:26px; color:var(--pop-red); text-shadow:0 2px 0 #fff;
+    pointer-events:none; transform:translate(-50%,-50%); animation:popUp .8s ease-out forwards; }
+  @keyframes popUp { 0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+    20%{opacity:1; transform:translate(-50%,-60%) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-150%) scale(1);} }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="overlay">
+  <h1 id="title">⚔️ たいせんバトル</h1>
+  <p id="desc">じぶんのキャラをえらんで、てきとバトル！<br>こうげき・ひっさつ・かいふく でたたかおう</p>
+  <button id="btn">スタート</button>
+</div>
+
+<script>
+// ============ 工房エンジン v2（共通・外部依存ゼロ） ============
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const wrap=document.getElementById('wrap');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const PAL={ red:'#FF6B6B', yellow:'#FFD93D', green:'#6BCB77', blue:'#4D96FF', ink:'#2b3a67' };
+
+let W,H,dpr;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize); resize();
+
+const lerp=(a,b,t)=>a+(b-a)*t;
+const easeOut=t=>1-Math.pow(1-t,3);
+const easeOutBack=t=>1+2.7*Math.pow(t-1,3)+1.7*Math.pow(t-1,2);
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+function shade(hex,amt){
+  const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const f=v=>clamp(Math.round(v+(amt>0?(255-v)*amt:v*amt)),0,255);
+  return '#'+((1<<24)+(f(r)<<16)+(f(g)<<8)+f(b)).toString(16).slice(1);
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function groundShadow(x,y,w){ if(w<=0)return; ctx.fillStyle='rgba(43,58,103,.18)';
+  ctx.beginPath(); ctx.ellipse(x,y,w,w*0.28,0,0,7); ctx.fill(); }
+function glow(x,y,r,color,layers=4){ for(let i=layers;i>=1;i--){ ctx.globalAlpha=0.12*(i/layers);
+  ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,r*(i/layers),0,7); ctx.fill(); } ctx.globalAlpha=1; }
+// かわいいキャラ。emoji を顔に乗せて個性を出す
+function drawBlob(x,y,r,color,emoji,o={}){
+  const line=o.line||shade(color,-0.45);
+  groundShadow(x,y+r*1.05,r*0.95);
+  ctx.lineJoin='round'; ctx.fillStyle=color; ctx.strokeStyle=line; ctx.lineWidth=Math.max(3,r*0.16);
+  ctx.beginPath(); ctx.ellipse(x,y,r,r*0.92,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=shade(color,0.35);
+  ctx.beginPath(); ctx.ellipse(x,y-r*0.4,r*0.7,r*0.35,0,0,Math.PI,true); ctx.fill();
+  if(emoji){ ctx.font=Math.round(r*0.9)+'px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(emoji,x,y+r*0.05); }
+  ctx.fillStyle='rgba(255,107,107,.5)';
+  ctx.beginPath(); ctx.arc(x-r*0.62,y+r*0.28,r*0.13,0,7); ctx.arc(x+r*0.62,y+r*0.28,r*0.13,0,7); ctx.fill();
+}
+
+let bgScroll=0;
+function drawSky(top='#aee2ff',mid='#cdeeff',bot='#ffe9b0'){
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,top); g.addColorStop(.6,mid); g.addColorStop(1,bot);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='rgba(255,255,255,.9)';
+  for(let i=0;i<3;i++){ const cx=((i*210-bgScroll)%(W+220)+(W+220))%(W+220)-110, cy=H*0.12+i*34;
+    ctx.beginPath(); ctx.arc(cx,cy,17,0,7); ctx.arc(cx+20,cy+5,23,0,7); ctx.arc(cx+45,cy,15,0,7);
+    ctx.rect(cx,cy,45,16); ctx.fill(); }
+}
+function vignette(){ const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.4,W/2,H/2,Math.max(W,H)*0.75);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(43,58,103,.18)'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+
+let shakeT=0,shakeMag=0; function shake(mag=6,dur=0.25){ shakeMag=mag; shakeT=dur; }
+let particles=[];
+function burst(x,y,color,n=14){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(40,180);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-40,life:rand(.4,.8),t:0,c:color,r:rand(2,5)}); } }
+function confetti(n=40){ for(let i=0;i<n;i++) particles.push({x:rand(0,W),y:rand(-40,0),
+  vx:rand(-30,30),vy:rand(60,160),life:rand(1.2,2),t:0,c:[PAL.red,PAL.yellow,PAL.green,PAL.blue][i%4],r:rand(3,5)}); }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=520*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1; }
+function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
+  el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),850); }
+
+// ============ ここからゲーム固有：ターン制コマンドバトル ============
+// キャラ定義（タイプ相性: ほのお>くさ>みず>ほのお）
+const CHARS=[
+  { name:'ファイ',  type:'ほのお', color:PAL.red,    emoji:'🔥', maxhp:60, atk:14 },
+  { name:'アクア',  type:'みず',   color:PAL.blue,   emoji:'💧', maxhp:70, atk:12 },
+  { name:'リーフ',  type:'くさ',   color:PAL.green,  emoji:'🌿', maxhp:65, atk:13 },
+];
+const BEATS={ 'ほのお':'くさ', 'くさ':'みず', 'みず':'ほのお' }; // 攻め側 type が beats なら2倍
+
+let state='ready';        // ready / select / play / over
+let player=null, enemy=null;
+let turn='player';        // player / enemy
+let busy=false;           // 演出中は入力ロック
+let message='';
+let buttons=[];           // クリック領域 {x,y,w,h,label,kind,data}
+let attackFx=0;           // 攻撃時の突進アニメ 0..1
+let attacker=null;        // 'player' / 'enemy'（突進方向）
+let hpAnim={player:1, enemy:1}; // HPバーの表示値(割合)を滑らかに
+
+function mkFighter(def){ return { ...def, hp:def.maxhp }; }
+
+function start(){ state='select'; overlay.classList.add('hide'); buildSelectButtons(); }
+
+function buildSelectButtons(){
+  buttons=[];
+  const cw=Math.min(W-40,360), x=(W-cw)/2;
+  CHARS.forEach((c,i)=>{
+    buttons.push({ x, y:H*0.34+i*92, w:cw, h:78, kind:'pick', data:i, char:c });
+  });
+}
+
+function pickChar(i){
+  player=mkFighter(CHARS[i]);
+  // 敵はプレイヤー以外からランダム
+  const others=CHARS.filter((_,k)=>k!==i);
+  enemy=mkFighter(others[Math.floor(rand(0,others.length))]);
+  hpAnim={player:1, enemy:1};
+  turn='player'; busy=false; message=player.name+' のばんだ！ わざをえらぼう';
+  state='play'; buildBattleButtons();
+}
+
+function buildBattleButtons(){
+  buttons=[];
+  if(turn!=='player'||busy) return; // 自分のターンだけボタンを出す
+  const cw=Math.min(W-32,420), x=(W-cw)/2, gap=10, bw=(cw-gap)/2;
+  const y0=H-180;
+  const defs=[
+    {label:'こうげき', kind:'move', data:'atk',  color:PAL.red},
+    {label:'ひっさつ', kind:'move', data:'big',  color:PAL.yellow},
+    {label:'かいふく', kind:'move', data:'heal', color:PAL.green},
+    {label:'ぼうぎょ', kind:'move', data:'def',  color:PAL.blue},
+  ];
+  defs.forEach((d,i)=>{
+    const col=i%2, row=Math.floor(i/2);
+    buttons.push({ x:x+col*(bw+gap), y:y0+row*64, w:bw, h:54, ...d });
+  });
+}
+
+// ダメージ計算（タイプ相性込み）
+function damage(att,def,base){
+  let dmg=base + Math.round(rand(-2,2));
+  let eff=1;
+  if(BEATS[att.type]===def.type) eff=2;          // こうかばつぐん
+  else if(BEATS[def.type]===att.type) eff=0.5;   // いまひとつ
+  dmg=Math.max(1,Math.round(dmg*eff));
+  return {dmg,eff};
+}
+
+let defending={player:false, enemy:false};
+
+function doMove(kind){
+  if(turn!=='player'||busy) return;
+  busy=true; buttons=[]; defending.player=false;
+  if(kind==='atk'){ performAttack(player,enemy,'player',player.atk,'こうげき！'); }
+  else if(kind==='big'){
+    if(Math.random()<0.7) performAttack(player,enemy,'player',Math.round(player.atk*1.8),'ひっさつ技！');
+    else { message=player.name+' のひっさつ… ミスした！'; setTimeout(endPlayerTurn,900); }
+  }
+  else if(kind==='heal'){
+    const h=Math.round(player.maxhp*0.3); player.hp=Math.min(player.maxhp,player.hp+h);
+    message=player.name+' は '+h+' かいふくした！';
+    burst(playerPos().x,playerPos().y,PAL.green,18);
+    numberPop('+'+h, playerPos().x, playerPos().y-40);
+    setTimeout(endPlayerTurn,900);
+  }
+  else if(kind==='def'){
+    defending.player=true; message=player.name+' はみをまもっている！';
+    setTimeout(endPlayerTurn,800);
+  }
+}
+
+function performAttack(att,def,who,base,label){
+  attacker=who; attackFx=0; message=att.name+' の'+label;
+  // 突進→ヒットのタイミングで判定
+  setTimeout(()=>{
+    let {dmg,eff}=damage(att,def,base);
+    if((who==='player'&&defending.enemy)||(who==='enemy'&&defending.player)) dmg=Math.round(dmg*0.4);
+    def.hp=Math.max(0,def.hp-dmg);
+    const dp=(who==='player')?enemyPos():playerPos();
+    burst(dp.x,dp.y,PAL.red,16); shake(eff===2?10:6); numberPop('-'+dmg, dp.x, dp.y-40);
+    if(eff===2) message='こうかばつぐん！ '+dmg+' のダメージ';
+    else if(eff===0.5) message='いまひとつ… '+dmg+' のダメージ';
+    else message=dmg+' のダメージ！';
+    setTimeout(()=>{
+      if(def.hp<=0){ finishBattle(who); return; }
+      if(who==='player') endPlayerTurn(); else endEnemyTurn();
+    },800);
+  },350);
+}
+
+function endPlayerTurn(){
+  if(enemy.hp<=0){ finishBattle('player'); return; }
+  turn='enemy'; busy=true; defending.enemy=false;
+  setTimeout(enemyAct,700);
+}
+function endEnemyTurn(){
+  if(player.hp<=0){ finishBattle('enemy'); return; }
+  turn='player'; busy=false; message='わざをえらぼう！'; buildBattleButtons();
+}
+
+function enemyAct(){
+  // かんたんAI: HPが少なければ回復、たまに防御、ふつうは攻撃
+  const r=Math.random();
+  if(enemy.hp<enemy.maxhp*0.3 && r<0.5){
+    const h=Math.round(enemy.maxhp*0.3); enemy.hp=Math.min(enemy.maxhp,enemy.hp+h);
+    message=enemy.name+' は '+h+' かいふくした！';
+    burst(enemyPos().x,enemyPos().y,PAL.green,18); numberPop('+'+h,enemyPos().x,enemyPos().y-40);
+    setTimeout(endEnemyTurn,900);
+  } else if(r<0.15){
+    defending.enemy=true; message=enemy.name+' はみをまもっている！';
+    setTimeout(endEnemyTurn,800);
+  } else if(r<0.4){
+    if(Math.random()<0.7) performAttack(enemy,player,'enemy',Math.round(enemy.atk*1.8),'ひっさつ技！');
+    else { message=enemy.name+' のひっさつ… ミスした！'; setTimeout(endEnemyTurn,900); }
+  } else {
+    performAttack(enemy,player,'enemy',enemy.atk,'こうげき！');
+  }
+}
+
+function finishBattle(winner){
+  state='over'; busy=true; buttons=[];
+  const win=(winner==='player');
+  if(win){ confetti(60); message='かった！🎉'; }
+  else { shake(12); message='まけちゃった…'; }
+  setTimeout(()=>{
+    title.textContent = win ? '🏆 かち！' : '😢 まけ…';
+    desc.innerHTML = win ? (player.name+' のしょうり！<br>もういちどバトルする？')
+                         : (player.name+' はたおれた…<br>リベンジしよう！');
+    btn.textContent='もういちど';
+    overlay.classList.remove('hide');
+  },1200);
+}
+
+// 位置ヘルパー
+function playerPos(){ return {x:W*0.27, y:H*0.5}; }
+function enemyPos(){  return {x:W*0.73, y:H*0.35}; }
+
+// --- 入力 ---
+function hit(b,px,py){ return px>=b.x&&px<=b.x+b.w&&py>=b.y&&py<=b.y+b.h; }
+cv.addEventListener('pointerdown', e=>{
+  e.preventDefault();
+  const rect=cv.getBoundingClientRect();
+  const px=e.clientX-rect.left, py=e.clientY-rect.top;
+  for(const b of buttons){
+    if(hit(b,px,py)){
+      if(b.kind==='pick') pickChar(b.data);
+      else if(b.kind==='move') doMove(b.data);
+      return;
+    }
+  }
+});
+btn.addEventListener('click', ()=>{ if(state!=='play') start(); });
+
+// --- 描画 ---
+function drawHPBar(x,y,w,who,f){
+  const fr=clamp(f,0,1);
+  ctx.fillStyle='rgba(43,58,103,.25)'; roundRect(x,y,w,14,7); ctx.fill();
+  const col = fr>0.5?PAL.green : fr>0.25?PAL.yellow : PAL.red;
+  ctx.fillStyle=col; roundRect(x,y,Math.max(0,w*fr),14,7); ctx.fill();
+  ctx.strokeStyle='rgba(43,58,103,.5)'; ctx.lineWidth=2; roundRect(x,y,w,14,7); ctx.stroke();
+}
+function drawFighter(fighter,pos,facing){
+  const bob=Math.sin(performance.now()/400)*3;
+  let dx=0;
+  if(attacker && ((attacker==='player'&&fighter===player)||(attacker==='enemy'&&fighter===enemy))){
+    const lunge=Math.sin(attackFx*Math.PI); dx=facing*lunge*40;
+  }
+  drawBlob(pos.x+dx, pos.y+bob, 46, fighter.color, fighter.emoji);
+}
+
+function drawNamePlate(fighter,x,y,who){
+  ctx.fillStyle='#fff'; roundRect(x,y,170,52,12); ctx.fill();
+  ctx.strokeStyle=shade(fighter.color,-0.2); ctx.lineWidth=3; roundRect(x,y,170,52,12); ctx.stroke();
+  ctx.fillStyle=PAL.ink; ctx.font='800 16px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText(fighter.name+'（'+fighter.type+'）', x+12, y+15);
+  drawHPBar(x+12,y+30,146,who,hpAnim[who]);
+  ctx.fillStyle=PAL.ink; ctx.font='700 11px sans-serif'; ctx.textAlign='right';
+  ctx.fillText(Math.ceil(fighter.hp)+'/'+fighter.maxhp, x+158, y+25);
+}
+
+function drawButton(b){
+  const c=b.color||PAL.yellow;
+  ctx.fillStyle=c; roundRect(b.x,b.y,b.w,b.h,14); ctx.fill();
+  ctx.strokeStyle=shade(c,-0.35); ctx.lineWidth=3; roundRect(b.x,b.y,b.w,b.h,14); ctx.stroke();
+  ctx.fillStyle=PAL.ink; ctx.font='800 20px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(b.label, b.x+b.w/2, b.y+b.h/2);
+}
+
+function drawMessageBox(){
+  const x=14, y=H-58, w=W-28, h=46;
+  ctx.fillStyle='rgba(255,255,255,.95)'; roundRect(x,y,w,h,12); ctx.fill();
+  ctx.strokeStyle=PAL.ink; ctx.lineWidth=2; roundRect(x,y,w,h,12); ctx.stroke();
+  ctx.fillStyle=PAL.ink; ctx.font='800 16px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(message, x+w/2, y+h/2);
+}
+
+function render(dt){
+  drawSky();
+  if(state==='select'){
+    ctx.fillStyle=PAL.ink; ctx.font='900 26px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('キャラをえらぼう！', W/2, H*0.2);
+    ctx.font='700 14px sans-serif'; ctx.fillText('ほのお→くさ→みず→ほのお に つよい', W/2, H*0.2+30);
+    for(const b of buttons){
+      const c=b.char;
+      ctx.fillStyle='#fff'; roundRect(b.x,b.y,b.w,b.h,16); ctx.fill();
+      ctx.strokeStyle=shade(c.color,-0.2); ctx.lineWidth=4; roundRect(b.x,b.y,b.w,b.h,16); ctx.stroke();
+      drawBlob(b.x+46, b.y+b.h/2, 30, c.color, c.emoji);
+      ctx.fillStyle=PAL.ink; ctx.textAlign='left';
+      ctx.font='900 22px sans-serif'; ctx.textBaseline='alphabetic';
+      ctx.fillText(c.name, b.x+92, b.y+34);
+      ctx.font='700 14px sans-serif';
+      ctx.fillText(c.type+'タイプ ・ HP'+c.maxhp+' ・ ちから'+c.atk, b.x+92, b.y+58);
+    }
+    drawParticles(); vignette(); return;
+  }
+
+  if(state==='play'||state==='over'){
+    // HPアニメ追従
+    hpAnim.player += (player.hp/player.maxhp - hpAnim.player)*Math.min(1,dt*8);
+    hpAnim.enemy  += (enemy.hp/enemy.maxhp  - hpAnim.enemy )*Math.min(1,dt*8);
+    if(attacker){ attackFx+=dt*3.2; if(attackFx>=1){ attackFx=0; attacker=null; } }
+
+    // VS マーク
+    ctx.fillStyle='rgba(43,58,103,.15)'; ctx.font='900 90px sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('VS', W/2, H*0.42);
+
+    drawFighter(enemy, enemyPos(), -1);   // 敵は左を向く（プレイヤーへ突進）
+    drawFighter(player, playerPos(), 1);  // 自分は右を向く
+
+    drawNamePlate(enemy, W-184, 16, 'enemy');
+    drawNamePlate(player, 14, H*0.55, 'player');
+
+    drawParticles();
+
+    if(state==='play'){
+      for(const b of buttons) drawButton(b);
+      if(buttons.length===0) drawMessageBox();
+      else { // ボタンがある時もメッセージは上に小さく
+        ctx.fillStyle='rgba(43,58,103,.85)'; roundRect(14,H-232,W-28,40,10); ctx.fill();
+        ctx.fillStyle='#fff'; ctx.font='800 15px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(message, W/2, H-212);
+      }
+    } else { drawMessageBox(); }
+    vignette(); return;
+  }
+
+  // ready デモ
+  const t=performance.now()/1000;
+  drawBlob(W*0.32, H*0.5+Math.sin(t*2)*4, 44, PAL.red, '🔥');
+  drawBlob(W*0.68, H*0.5+Math.sin(t*2+1)*4, 44, PAL.blue, '💧');
+  drawParticles(); vignette();
+}
+
+// --- ループ ---
+let last=0;
+function frame(ts){
+  requestAnimationFrame(frame);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  bgScroll+=12*dt;
+  ctx.save();
+  if(shakeT>0){ shakeT-=dt; const m=shakeMag*(shakeT>0?1:0); ctx.translate(rand(-m,m),rand(-m,m)); }
+  updateParticles(dt);
+  render(dt);
+  ctx.restore();
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>マイクラふう 一人称3D ぼうけん</title>
+<style>
+  :root { --pop-yellow:#FFD93D; --ink:#2b3a67; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
+  html, body { height:100%; overflow:hidden; background:#8fd3ff;
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; }
+  canvas { display:block; width:100%; height:100%; touch-action:none; }
+
+  /* 上バー */
+  #topbar { position:absolute; top:max(8px,env(safe-area-inset-top)); left:0; right:0; z-index:5;
+    display:flex; align-items:center; justify-content:center; gap:8px; padding:0 10px; pointer-events:none; }
+  .tb { pointer-events:auto; font-size:15px; font-weight:800; padding:8px 12px; border:none; border-radius:11px;
+    color:#fff; box-shadow:0 4px 0 rgba(0,0,0,.22); }
+  .tb:active { transform:translateY(3px); box-shadow:0 1px 0 rgba(0,0,0,.22); }
+  #resetBtn { background:#fff; color:var(--ink); box-shadow:0 4px 0 #b9c4d8; }
+  #quest { pointer-events:none; font-size:14px; font-weight:800; color:#fff; padding:7px 12px;
+    background:rgba(20,28,46,.45); border-radius:11px; text-shadow:0 1px 2px rgba(0,0,0,.4); }
+
+  /* 中央クロスヘア */
+  #cross { position:absolute; left:50%; top:46%; width:26px; height:26px; margin:-13px 0 0 -13px; z-index:4; pointer-events:none; }
+  #cross::before, #cross::after { content:""; position:absolute; background:rgba(255,255,255,.85); box-shadow:0 0 2px rgba(0,0,0,.6); }
+  #cross::before { left:11px; top:0; width:4px; height:26px; border-radius:2px; }
+  #cross::after  { top:11px; left:0; height:4px; width:26px; border-radius:2px; }
+
+  /* 右側コントロール（ジャンプ・こわす・おく） */
+  #rctrl { position:absolute; right:14px; bottom:calc(84px + env(safe-area-inset-bottom)); z-index:6;
+    display:flex; flex-direction:column; gap:12px; }
+  .rb { width:66px; height:66px; border-radius:50%; border:none; color:#fff; font-size:13px; font-weight:900;
+    line-height:1.05; box-shadow:0 5px 0 rgba(0,0,0,.28); display:flex; align-items:center; justify-content:center; flex-direction:column; }
+  .rb:active { transform:translateY(4px); box-shadow:0 1px 0 rgba(0,0,0,.28); }
+  .rb .ic { font-size:24px; }
+  #jumpBtn { background:#4D96FF; box-shadow:0 5px 0 #2f6dca; }
+  #digBtn  { background:#e07b39; box-shadow:0 5px 0 #a85420; }
+  #placeBtn{ background:#3aa657; box-shadow:0 5px 0 #277a3e; }
+
+  /* 左バーチャルスティック */
+  #stick { position:absolute; z-index:6; width:108px; height:108px; margin:-54px 0 0 -54px; border-radius:50%;
+    background:rgba(255,255,255,.16); border:2px solid rgba(255,255,255,.35); display:none; pointer-events:none; }
+  #knob { position:absolute; left:50%; top:50%; width:48px; height:48px; margin:-24px 0 0 -24px; border-radius:50%;
+    background:rgba(255,255,255,.5); border:2px solid rgba(255,255,255,.8); }
+
+  /* ブロックパレット */
+  #palette { position:absolute; bottom:0; left:0; right:0; z-index:5;
+    display:flex; justify-content:center; align-items:flex-end; flex-wrap:wrap; gap:6px; min-height:60px;
+    padding:7px 6px calc(7px + env(safe-area-inset-bottom)); background:rgba(20,28,46,.5); }
+  .slot { position:relative; width:44px; height:44px; border-radius:9px; border:3px solid transparent;
+    box-shadow:inset 0 -6px 0 rgba(0,0,0,.22); font-size:22px; display:flex; align-items:center; justify-content:center; }
+  .slot.sel { border-color:var(--pop-yellow); transform:translateY(-4px); }
+  .slot .cnt { position:absolute; right:-3px; bottom:-3px; min-width:18px; height:18px; line-height:18px;
+    padding:0 3px; border-radius:9px; background:var(--ink); color:#fff; font-size:12px; font-weight:900; text-align:center; }
+  #emptyHint { color:#cfe0ff; font-size:13px; font-weight:700; align-self:center; }
+
+  /* オーバーレイ */
+  #overlay { position:absolute; inset:0; z-index:10; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:16px; background:rgba(11,16,38,.72); color:#fff; text-align:center; padding:24px; }
+  #overlay h1 { font-size:27px; }
+  #overlay p { font-size:15px; line-height:1.75; opacity:.95; }
+  #startBtn { font-size:22px; font-weight:900; padding:14px 34px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; }
+  #startBtn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+
+<div id="topbar">
+  <span id="quest">💎 0/3</span>
+  <button id="resetBtn" class="tb">🌍 さいしょから</button>
+</div>
+
+<div id="cross"></div>
+<div id="stick"><div id="knob"></div></div>
+
+<div id="rctrl">
+  <button id="jumpBtn" class="rb"><span class="ic">⤒</span>ジャンプ</button>
+  <button id="digBtn" class="rb"><span class="ic">⛏️</span>こわす</button>
+  <button id="placeBtn" class="rb"><span class="ic">🧱</span>おく</button>
+</div>
+
+<div id="palette"></div>
+
+<div id="overlay">
+  <h1>⛏️ 一人称3D ぼうけん</h1>
+  <p>ひだりを なぞって あるく／みぎを なぞって みまわす。<br>
+  「⛏こわす」で めのまえの ブロックを ほる。<br>
+  ほると したの パレットに たまる →「🧱おく」で つめる。<br>
+  ふかく ほって ダイヤ💎を 3こ さがそう！</p>
+  <button id="startBtn">スタート</button>
+</div>
+
+<script>
+// ===== すべてインライン・自己完結（外部 fetch / CDN / import / 画像URL なし）=====
+// WebGL はブラウザ標準API。three.js 等は使わず自前で 3D ボクセルを描く。
+const cv=document.getElementById('c');
+const overlay=document.getElementById('overlay'), startBtn=document.getElementById('startBtn');
+const resetBtn=document.getElementById('resetBtn'), questEl=document.getElementById('quest');
+const palette=document.getElementById('palette');
+const stickEl=document.getElementById('stick'), knobEl=document.getElementById('knob');
+
+let gl=cv.getContext('webgl',{antialias:false}) || cv.getContext('experimental-webgl');
+if(!gl){ overlay.innerHTML='<h1>3Dひょうじに たいおうして いません</h1>'+
+  '<p>このブラウザでは あそべません。<br>2Dばん の マイクラを あそんでください。</p>'; }
+
+// ====================== 行列（4x4・列優先）======================
+const M4={
+  perspective(fovy,aspect,near,far){ const f=1/Math.tan(fovy/2), nf=1/(near-far);
+    return [f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0]; },
+  lookAt(ex,ey,ez, cx,cy,cz, ux,uy,uz){
+    let zx=ex-cx, zy=ey-cy, zz=ez-cz; let l=Math.hypot(zx,zy,zz)||1; zx/=l; zy/=l; zz/=l;
+    let xx=uy*zz-uz*zy, xy=uz*zx-ux*zz, xz=ux*zy-uy*zx; l=Math.hypot(xx,xy,xz)||1; xx/=l; xy/=l; xz/=l;
+    const yx=zy*xz-zz*xy, yy=zz*xx-zx*xz, yz=zx*xy-zy*xx;
+    return [xx,yx,zx,0, xy,yy,zy,0, xz,yz,zz,0,
+      -(xx*ex+xy*ey+xz*ez), -(yx*ex+yy*ey+yz*ez), -(zx*ex+zy*ey+zz*ez), 1]; },
+  mul(a,b){ const o=new Array(16);
+    for(let r=0;r<4;r++)for(let c=0;c<4;c++){ let s=0; for(let k=0;k<4;k++) s+=a[k*4+r]*b[c*4+k]; o[c*4+r]=s; }
+    return o; }
+};
+
+// ====================== シェーダ ======================
+const VS=`attribute vec3 a_pos; attribute float a_light; attribute vec2 a_uv;
+uniform mat4 u_mvp; varying float v_light; varying vec2 v_uv; varying float v_fog;
+void main(){ vec4 p=u_mvp*vec4(a_pos,1.0); gl_Position=p; v_light=a_light; v_uv=a_uv; v_fog=p.w; }`;
+const FS=`precision mediump float;
+uniform sampler2D u_tex; uniform vec3 u_fogc; uniform float u_fn; uniform float u_ff;
+varying float v_light; varying vec2 v_uv; varying float v_fog;
+void main(){ vec4 t=texture2D(u_tex,v_uv); if(t.a<0.25) discard;
+  vec3 col=t.rgb*v_light;
+  float f=clamp((u_ff - v_fog)/(u_ff - u_fn), 0.0, 1.0);
+  col=mix(u_fogc, col, f);
+  gl_FragColor=vec4(col, t.a); }`;
+function shader(type,src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s)); return s; }
+let prog,locPos,locLight,locUv,locMvp,locFogc,locFn,locFf;
+function initProgram(){
+  prog=gl.createProgram(); gl.attachShader(prog,shader(gl.VERTEX_SHADER,VS));
+  gl.attachShader(prog,shader(gl.FRAGMENT_SHADER,FS)); gl.linkProgram(prog); gl.useProgram(prog);
+  locPos=gl.getAttribLocation(prog,'a_pos'); locLight=gl.getAttribLocation(prog,'a_light'); locUv=gl.getAttribLocation(prog,'a_uv');
+  locMvp=gl.getUniformLocation(prog,'u_mvp'); locFogc=gl.getUniformLocation(prog,'u_fogc');
+  locFn=gl.getUniformLocation(prog,'u_fn'); locFf=gl.getUniformLocation(prog,'u_ff');
+}
+
+// ====================== ブロック定義 ======================
+const AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WOOD=5, LEAF=6, WATER=7,
+      COAL=8, IRON=9, GOLD=10, DIAMOND=11, BEDROCK=12;
+// アトラスのタイル番号
+const TI={ grassTop:0, grassSide:1, dirt:2, stone:3, sand:4, woodTop:5, woodSide:6, leaf:7,
+  water:8, coal:9, iron:10, gold:11, diamond:12, bedrock:13, white:14 };
+const NTILES=15;
+// 各ブロックの面 → タイル。a=全面 / t=上 s=側 b=下
+const BTEX={
+  [GRASS]:{t:TI.grassTop,s:TI.grassSide,b:TI.dirt},
+  [DIRT]:{a:TI.dirt}, [STONE]:{a:TI.stone}, [SAND]:{a:TI.sand},
+  [WOOD]:{t:TI.woodTop,s:TI.woodSide,b:TI.woodTop}, [LEAF]:{a:TI.leaf},
+  [WATER]:{a:TI.water}, [COAL]:{a:TI.coal}, [IRON]:{a:TI.iron},
+  [GOLD]:{a:TI.gold}, [DIAMOND]:{a:TI.diamond}, [BEDROCK]:{a:TI.bedrock},
+};
+function tileOf(type,face){ const b=BTEX[type]; if(b.a!=null) return b.a;
+  return face==='t'?b.t : face==='b'?b.b : b.s; }
+// パレット表示（置けるブロックのみ）
+const PAL_ORDER=[GRASS,DIRT,STONE,SAND,WOOD,LEAF,COAL,IRON,GOLD,DIAMOND];
+const BMETA={
+  [GRASS]:{n:'くさ',c:'#6cbf3f'}, [DIRT]:{n:'つち',c:'#8a6440'}, [STONE]:{n:'いし',c:'#8b8b8b'},
+  [SAND]:{n:'すな',c:'#e3d6a2'}, [WOOD]:{n:'き',c:'#9a6b3f'}, [LEAF]:{n:'はっぱ',c:'#4f9d3a'},
+  [COAL]:{n:'せきたん',c:'#4a4a4a'}, [IRON]:{n:'てつ',c:'#b58b6a'}, [GOLD]:{n:'きん',c:'#e8c84a'},
+  [DIAMOND]:{n:'ダイヤ',c:'#6ff0e6'},
+};
+function isOpaque(t){ return t!==AIR && t!==WATER; }
+function isSolid(t){ return t!==AIR && t!==WATER; } // 当たり判定（水は通れる）
+
+// ====================== テクスチャ（ドット絵を生成）======================
+function buildAtlas(){
+  const cw=NTILES*16, c=document.createElement('canvas'); c.width=cw; c.height=16;
+  const g=c.getContext('2d');
+  const rnd=()=>Math.random();
+  const pick=a=>a[(rnd()*a.length)|0];
+  function fill(ti,fn){ const ox=ti*16; for(let y=0;y<16;y++)for(let x=0;x<16;x++){ g.fillStyle=fn(x,y); g.fillRect(ox+x,y,1,1);} }
+  function speck(ti,cols,n){ const ox=ti*16; for(let k=0;k<n;k++){ const sx=(rnd()*14)|0, sy=(rnd()*14)|0, col=pick(cols);
+    const sz=1+((rnd()*2)|0); g.fillStyle=col; g.fillRect(ox+sx,sy,sz,sz);} }
+  const greens=['#6cbf3f','#63b536','#74c64a','#5aa830'];
+  const dirts=['#8a6440','#7d5a39','#946b45','#825c38'];
+  const stones=['#909090','#828282','#9a9a9a','#787878'];
+  const sands=['#e6d8a8','#dccd92','#efe3b0','#d8c987'];
+  const barks=['#9a6b3f','#8a5d36','#a5784a','#7d5230'];
+  const leaves=['#3f8b2f','#4f9d3a','#357a28','#46912f'];
+  fill(TI.grassTop, ()=>pick(greens));
+  fill(TI.grassSide,(x,y)=> y<4 ? (y===3&&rnd()<.5?pick(dirts):pick(greens)) : pick(dirts));
+  fill(TI.dirt, ()=>pick(dirts));
+  fill(TI.stone, ()=>pick(stones));
+  fill(TI.sand, ()=>pick(sands));
+  fill(TI.woodTop,(x,y)=>{ const d=Math.max(Math.abs(x-7.5),Math.abs(y-7.5))|0; return (d%2)?'#8a5d36':'#a5784a'; });
+  fill(TI.woodSide,(x,y)=> (x%5===0)?'#6f4a29':pick(barks));
+  fill(TI.leaf, ()=>pick(leaves));
+  fill(TI.water,()=> rnd()<.5?'#3f80d0':'#3a78c8');
+  fill(TI.coal, ()=>pick(stones)); speck(TI.coal,['#26282d','#1c1e22'],10);
+  fill(TI.iron, ()=>pick(stones)); speck(TI.iron,['#c8956a','#b07f55'],9);
+  fill(TI.gold, ()=>pick(stones)); speck(TI.gold,['#f2cf3e','#d8b62f'],8);
+  fill(TI.diamond,()=>pick(stones)); speck(TI.diamond,['#69e7e0','#9af3ee'],8);
+  fill(TI.bedrock,()=> pick(['#3a3a3a','#2c2c2c','#474747','#222222']));
+  fill(TI.white, ()=>'#ffffff');
+  // 水は半透明に（アルファ）
+  const id=g.getImageData(TI.water*16,0,16,16);
+  for(let i=3;i<id.data.length;i+=4) id.data[i]=165; g.putImageData(id,TI.water*16,0);
+
+  const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,c);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+}
+
+// ====================== ワールド ======================
+const SX=32, SY=24, SZ=32, WL=9;           // 海面レベル WL
+const vox=new Uint8Array(SX*SY*SZ);
+function vi(x,y,z){ return x + z*SX + y*SX*SZ; }
+function getV(x,y,z){
+  if(y<0) return BEDROCK; if(y>=SY) return AIR;
+  if(x<0||x>=SX||z<0||z>=SZ) return AIR;
+  return vox[vi(x,y,z)];
+}
+function setV(x,y,z,t){ if(x<0||x>=SX||y<0||y>=SY||z<0||z>=SZ) return; vox[vi(x,y,z)]=t; }
+
+function hash2(x,z){ let h=(x*374761393 + z*668265263); h=(h^(h>>>13))*1274126177; return ((h>>>0)%10000)/10000; }
+function vnoise(x,z){ const xi=Math.floor(x), zi=Math.floor(z), xf=x-xi, zf=z-zi;
+  const s=t=>t*t*(3-2*t); const u=s(xf), v=s(zf);
+  const a=hash2(xi,zi), b=hash2(xi+1,zi), c=hash2(xi,zi+1), d=hash2(xi+1,zi+1);
+  return a*(1-u)*(1-v)+b*u*(1-v)+c*(1-u)*v+d*u*v; }
+
+function genWorld(){
+  vox.fill(AIR);
+  const off=Math.random()*1000;
+  const hmap=new Array(SX*SZ);
+  for(let x=0;x<SX;x++)for(let z=0;z<SZ;z++){
+    let n=vnoise((x+off)/14,(z+off)/14)*0.65 + vnoise((x+off)/6,(z+off)/6)*0.35;
+    let h=Math.floor(7 + n*9); if(h<3)h=3; if(h>SY-5)h=SY-5; hmap[x+z*SX]=h;
+  }
+  for(let x=0;x<SX;x++)for(let z=0;z<SZ;z++){
+    const h=hmap[x+z*SX];
+    for(let y=0;y<=h;y++){
+      let t;
+      if(y===0) t=BEDROCK;
+      else if(y<h-3){ t=STONE;
+        const r=hash2(x*7+y*131, z*7+y*57);
+        if(y<h-3 && r<0.07) t=COAL;
+        if(y<h-6 && r<0.05) t=IRON;
+        if(y<h-9 && r<0.035) t=GOLD;
+        if((y<h-12||y<5) && r<0.03) t=DIAMOND;
+      }
+      else if(y<h) t=DIRT;
+      else t = (h<=WL+1)? SAND : GRASS;   // 水際は砂浜
+      setV(x,y,z,t);
+    }
+    // 海面まで水を満たす
+    for(let y=h+1;y<=WL;y++) if(getV(x,y,z)===AIR) setV(x,y,z,WATER);
+  }
+  // 木を生やす
+  for(let x=2;x<SX-2;x++)for(let z=2;z<SZ-2;z++){
+    const h=hmap[x+z*SX];
+    if(getV(x,h,z)!==GRASS) continue;
+    if(Math.random()<0.03){
+      const th=4+((Math.random()*2)|0);
+      for(let i=1;i<=th;i++) setV(x,h+i,z,WOOD);
+      const top=h+th;
+      for(let dx=-2;dx<=2;dx++)for(let dz=-2;dz<=2;dz++)for(let dy=-1;dy<=1;dy++){
+        if(Math.abs(dx)+Math.abs(dz)+Math.abs(dy)>3) continue;
+        const lx=x+dx, ly=top+dy, lz=z+dz;
+        if(getV(lx,ly,lz)===AIR) setV(lx,ly,lz,LEAF);
+      }
+      setV(x,top+1,z,LEAF);
+    }
+  }
+  return hmap;
+}
+
+// ====================== チャンクメッシュ ======================
+const CH=8, NCX=SX/CH, NCZ=SZ/CH;
+// 6面の頂点（単位キューブ・面ごと local uv と隣接オフセットと明度）
+const FACES=[
+  {n:[1,0,0], l:0.74, p:[[1,0,1],[1,0,0],[1,1,0],[1,1,1]], uv:[[0,0],[1,0],[1,1],[0,1]], f:'s'},
+  {n:[-1,0,0],l:0.74, p:[[0,0,0],[0,0,1],[0,1,1],[0,1,0]], uv:[[0,0],[1,0],[1,1],[0,1]], f:'s'},
+  {n:[0,1,0], l:1.0,  p:[[0,1,1],[1,1,1],[1,1,0],[0,1,0]], uv:[[0,0],[1,0],[1,1],[0,1]], f:'t'},
+  {n:[0,-1,0],l:0.5,  p:[[0,0,0],[1,0,0],[1,0,1],[0,0,1]], uv:[[0,0],[1,0],[1,1],[0,1]], f:'b'},
+  {n:[0,0,1], l:0.88, p:[[0,0,1],[1,0,1],[1,1,1],[0,1,1]], uv:[[0,0],[1,0],[1,1],[0,1]], f:'s'},
+  {n:[0,0,-1],l:0.88, p:[[1,0,0],[0,0,0],[0,1,0],[1,1,0]], uv:[[0,0],[1,0],[1,1],[0,1]], f:'s'},
+];
+const chunks=[]; // {sb,sn,wb,wn}
+function initChunks(){ for(let i=0;i<NCX*NCZ;i++) chunks.push({sb:gl.createBuffer(),sn:0,wb:gl.createBuffer(),wn:0}); }
+function faceVisible(cur,nb){
+  if(cur===WATER) return nb===AIR;            // 水は水面だけ
+  return !isOpaque(nb);                        // 不透明面は隣が空/水/外なら出す
+}
+function buildChunk(cx,cz){
+  const solid=[], water=[];
+  const x0=cx*CH, z0=cz*CH;
+  for(let x=x0;x<x0+CH;x++)for(let z=z0;z<z0+CH;z++)for(let y=0;y<SY;y++){
+    const t=getV(x,y,z); if(t===AIR) continue;
+    const arr = (t===WATER)? water : solid;
+    for(const F of FACES){
+      const nb=getV(x+F.n[0],y+F.n[1],z+F.n[2]);
+      if(!faceVisible(t,nb)) continue;
+      const ti=tileOf(t,F.f), L=F.l, AW=NTILES*16;   // テクセル単位で半px内側に寄せ継ぎ目を防ぐ
+      const idx=[0,1,2,0,2,3];
+      for(const i of idx){ const p=F.p[i], uv=F.uv[i];
+        const u=(ti*16+0.5+uv[0]*15)/AW, v=(0.5+uv[1]*15)/16;
+        arr.push(x+p[0], y+p[1], z+p[2], L, u, v); }
+    }
+  }
+  const ch=chunks[cx+cz*NCX];
+  gl.bindBuffer(gl.ARRAY_BUFFER,ch.sb); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(solid),gl.STATIC_DRAW); ch.sn=solid.length/6;
+  gl.bindBuffer(gl.ARRAY_BUFFER,ch.wb); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(water),gl.STATIC_DRAW); ch.wn=water.length/6;
+}
+function buildAll(){ for(let cz=0;cz<NCZ;cz++)for(let cx=0;cx<NCX;cx++) buildChunk(cx,cz); }
+function rebuildAround(x,z){ // 編集セルの属するチャンク＋境界なら隣も
+  const cx=Math.floor(x/CH), cz=Math.floor(z/CH);
+  const set=new Set(); const add=(a,b)=>{ if(a>=0&&a<NCX&&b>=0&&b<NCZ) set.add(a+b*NCX); };
+  add(cx,cz);
+  if(x%CH===0) add(cx-1,cz); if(x%CH===CH-1) add(cx+1,cz);
+  if(z%CH===0) add(cx,cz-1); if(z%CH===CH-1) add(cx,cz+1);
+  for(const k of set) buildChunk(k%NCX, Math.floor(k/NCX));
+}
+
+// ====================== プレイヤー・カメラ ======================
+const player={x:16,y:16,z:16,vx:0,vy:0,vz:0,onGround:false};
+let yaw=0.6, pitch=-0.15;
+const EYE=1.62, PH=1.7, PR=0.3, SPEED=4.4, GRAV=26, JUMP=8.4;
+function collide(px,py,pz){
+  const x0=Math.floor(px-PR), x1=Math.floor(px+PR);
+  const y0=Math.floor(py),     y1=Math.floor(py+PH-0.001);
+  const z0=Math.floor(pz-PR),  z1=Math.floor(pz+PR);
+  for(let x=x0;x<=x1;x++)for(let y=y0;y<=y1;y++)for(let z=z0;z<=z1;z++)
+    if(isSolid(getV(x,y,z))) return true;
+  return false;
+}
+function physics(dt){
+  // 入力 → 水平速度（向きに合わせる）
+  const f=Math.max(-1,Math.min(1,moveF+keyF)), s=Math.max(-1,Math.min(1,moveS+keyS));
+  const fx=Math.sin(yaw), fz=-Math.cos(yaw), rx=Math.cos(yaw), rz=Math.sin(yaw);
+  let wx=fx*f+rx*s, wz=fz*f+rz*s; const m=Math.hypot(wx,wz); if(m>1){ wx/=m; wz/=m; }
+  player.vx=wx*SPEED; player.vz=wz*SPEED;
+  if(wantJump && player.onGround){ player.vy=JUMP; player.onGround=false; } wantJump=false;
+  player.vy-=GRAV*dt; if(player.vy<-32)player.vy=-32;
+  // 軸ごとに移動して衝突解消
+  let nx=player.x+player.vx*dt; if(!collide(nx,player.y,player.z)) player.x=nx; else player.vx=0;
+  let nz=player.z+player.vz*dt; if(!collide(player.x,player.y,nz)) player.z=nz; else player.vz=0;
+  let ny=player.y+player.vy*dt;
+  if(!collide(player.x,ny,player.z)) player.y=ny;
+  else { if(player.vy<0) player.onGround=true; player.vy=0; }
+  player.onGround = collide(player.x, player.y-0.06, player.z);
+  // 世界の外に出ない
+  player.x=Math.max(PR+0.2,Math.min(SX-PR-0.2,player.x));
+  player.z=Math.max(PR+0.2,Math.min(SZ-PR-0.2,player.z));
+  if(player.y<-4){ respawn(); }
+}
+function dirVec(){ const cp=Math.cos(pitch);
+  return [cp*Math.sin(yaw), Math.sin(pitch), -cp*Math.cos(yaw)]; }
+function respawn(){
+  player.x=SX/2; player.z=SZ/2;
+  let top=SY-1; while(top>0 && getV(16,top,16)===AIR) top--;
+  player.y=top+1.05; player.vx=player.vy=player.vz=0;
+}
+
+// ====================== レイキャスト（DDA）======================
+function raycast(){
+  const d=dirVec(); const ox=player.x, oy=player.y+EYE, oz=player.z;
+  let x=Math.floor(ox), y=Math.floor(oy), z=Math.floor(oz);
+  const sx=d[0]>0?1:-1, sy=d[1]>0?1:-1, sz=d[2]>0?1:-1;
+  const inf=1e9;
+  let tMaxX = d[0]!==0 ? ((d[0]>0? (x+1-ox):(ox-x))/Math.abs(d[0])) : inf;
+  let tMaxY = d[1]!==0 ? ((d[1]>0? (y+1-oy):(oy-y))/Math.abs(d[1])) : inf;
+  let tMaxZ = d[2]!==0 ? ((d[2]>0? (z+1-oz):(oz-z))/Math.abs(d[2])) : inf;
+  const tdX = d[0]!==0?1/Math.abs(d[0]):inf, tdY=d[1]!==0?1/Math.abs(d[1]):inf, tdZ=d[2]!==0?1/Math.abs(d[2]):inf;
+  let prev=[x,y,z], t=0; const MAX=5.5;
+  for(let i=0;i<64;i++){
+    if(getV(x,y,z)!==AIR) return {cell:[x,y,z], prev};
+    prev=[x,y,z];
+    if(tMaxX<tMaxY && tMaxX<tMaxZ){ x+=sx; t=tMaxX; tMaxX+=tdX; }
+    else if(tMaxY<tMaxZ){ y+=sy; t=tMaxY; tMaxY+=tdY; }
+    else { z+=sz; t=tMaxZ; tMaxZ+=tdZ; }
+    if(t>MAX) break;
+  }
+  return null;
+}
+
+// ====================== 入力 ======================
+let moveF=0,moveS=0,keyF=0,keyS=0,wantJump=false;
+let moveId=null,lookId=null,moveOrigin=null,lookLast=null;
+cv.addEventListener('pointerdown',e=>{ if(state!=='play')return; e.preventDefault();
+  const half=window.innerWidth/2;
+  if(e.clientX<half && moveId===null){ moveId=e.pointerId; moveOrigin={x:e.clientX,y:e.clientY};
+    stickEl.style.display='block'; stickEl.style.left=e.clientX+'px'; stickEl.style.top=e.clientY+'px';
+    knobEl.style.left='50%'; knobEl.style.top='50%'; }
+  else if(lookId===null){ lookId=e.pointerId; lookLast={x:e.clientX,y:e.clientY}; }
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove',e=>{ if(state!=='play')return;
+  if(e.pointerId===moveId){ let dx=e.clientX-moveOrigin.x, dy=e.clientY-moveOrigin.y;
+    const len=Math.hypot(dx,dy), max=46; if(len>max){ dx*=max/len; dy*=max/len; }
+    moveS=dx/max; moveF=-dy/max; knobEl.style.left=(50+dx*54/max)+'%'; knobEl.style.top=(50+dy*54/max)+'%'; }
+  else if(e.pointerId===lookId){ const dx=e.clientX-lookLast.x, dy=e.clientY-lookLast.y;
+    yaw+=dx*0.005; pitch-=dy*0.005; const lim=Math.PI/2-0.05; if(pitch>lim)pitch=lim; if(pitch<-lim)pitch=-lim;
+    lookLast={x:e.clientX,y:e.clientY}; }
+});
+function endPointer(id){ if(id===moveId){ moveId=null; moveF=moveS=0; stickEl.style.display='none'; }
+  if(id===lookId){ lookId=null; } }
+cv.addEventListener('pointerup',e=>endPointer(e.pointerId));
+cv.addEventListener('pointercancel',e=>endPointer(e.pointerId));
+
+// ボタン
+document.getElementById('jumpBtn').addEventListener('pointerdown',e=>{ e.preventDefault(); wantJump=true; });
+document.getElementById('digBtn').addEventListener('pointerdown',e=>{ e.preventDefault(); dig(); });
+document.getElementById('placeBtn').addEventListener('pointerdown',e=>{ e.preventDefault(); place(); });
+// PC キーボード
+addEventListener('keydown',e=>{ if(state!=='play'){ if(e.code==='Space'){e.preventDefault();start();} return; }
+  if(e.code==='KeyW')keyF=1; else if(e.code==='KeyS')keyF=-1;
+  else if(e.code==='KeyA')keyS=-1; else if(e.code==='KeyD')keyS=1;
+  else if(e.code==='Space'){ e.preventDefault(); wantJump=true; }
+  else if(e.code==='KeyE') dig(); else if(e.code==='KeyQ') place(); });
+addEventListener('keyup',e=>{ if(e.code==='KeyW'||e.code==='KeyS')keyF=0; if(e.code==='KeyA'||e.code==='KeyD')keyS=0; });
+
+// ====================== 破壊・設置 ======================
+let inv={}, selected=null, diamonds=0;
+function dig(){ const r=raycast(); if(!r)return; const [x,y,z]=r.cell; const t=getV(x,y,z);
+  if(t===AIR||t===BEDROCK) return;
+  setV(x,y,z,AIR); rebuildAround(x,z);
+  if(t!==WATER){ inv[t]=(inv[t]||0)+1; if(t===DIAMOND){ diamonds++; if(diamonds===3) celebrate(); } updateHud(); buildPalette(); }
+}
+function place(){ const r=raycast(); if(!r)return; const [x,y,z]=r.prev;
+  if(selected==null||!(inv[selected]>0)) return;
+  if(getV(x,y,z)!==AIR && getV(x,y,z)!==WATER) return;
+  // プレイヤーと重なる位置には置けない
+  if(x+1>player.x-PR && x<player.x+PR && z+1>player.z-PR && z<player.z+PR &&
+     y+1>player.y && y<player.y+PH) return;
+  setV(x,y,z,selected); rebuildAround(x,z);
+  inv[selected]--; if(inv[selected]<=0){ delete inv[selected]; selected=PAL_ORDER.find(b=>inv[b]>0)??null; }
+  updateHud(); buildPalette();
+}
+
+// ====================== UI ======================
+function buildPalette(){
+  palette.innerHTML='';
+  const have=PAL_ORDER.filter(b=>inv[b]>0);
+  if(have.length===0){ const h=document.createElement('div'); h.id='emptyHint';
+    h.textContent='⛏ ブロックを ほると ここに たまる'; palette.appendChild(h); return; }
+  if(selected==null||!(inv[selected]>0)) selected=have[0];
+  have.forEach(b=>{ const el=document.createElement('div');
+    el.className='slot'+(b===selected?' sel':''); el.style.background=BMETA[b].c;
+    const c=document.createElement('div'); c.className='cnt'; c.textContent=inv[b]; el.appendChild(c);
+    el.addEventListener('pointerdown',ev=>{ ev.preventDefault(); selected=b;
+      [...palette.children].forEach(s=>s.classList&&s.classList.remove('sel')); el.classList.add('sel'); });
+    palette.appendChild(el);
+  });
+}
+function updateHud(){ questEl.textContent = diamonds>=3 ? '🎉 ダイヤ 3こ クリア！' : ('💎 '+diamonds+'/3'); }
+let celebrateT=0;
+function celebrate(){ celebrateT=1.5; }
+
+// ====================== 描画ループ ======================
+let W,H,dpr;
+function resize(){ dpr=Math.min(window.devicePixelRatio||1,2);
+  W=window.innerWidth; H=window.innerHeight;
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  if(gl) gl.viewport(0,0,cv.width,cv.height);
+}
+addEventListener('resize',resize);
+
+const FOGC=[0.56,0.83,1.0];
+let selBuf=null;
+function drawChunkBuf(buf,count){ if(count===0)return;
+  gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.enableVertexAttribArray(locPos);   gl.vertexAttribPointer(locPos,3,gl.FLOAT,false,24,0);
+  gl.enableVertexAttribArray(locLight); gl.vertexAttribPointer(locLight,1,gl.FLOAT,false,24,12);
+  gl.enableVertexAttribArray(locUv);    gl.vertexAttribPointer(locUv,2,gl.FLOAT,false,24,16);
+  gl.drawArrays(gl.TRIANGLES,0,count);
+}
+function drawSelection(mvp){ const r=raycast(); if(!r)return; const [x,y,z]=r.cell;
+  const e=0.004, a=x-e,b=x+1+e, cc=y-e,d=y+1+e, f=z-e,gg=z+1+e;
+  const C=[[a,cc,f],[b,cc,f],[b,cc,gg],[a,cc,gg],[a,d,f],[b,d,f],[b,d,gg],[a,d,gg]];
+  const E=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  const uw=(TI.white+0.5)/NTILES; const verts=[];
+  for(const [i,j] of E){ for(const k of [i,j]){ verts.push(C[k][0],C[k][1],C[k][2],1.0,uw,0.5); } }
+  if(!selBuf) selBuf=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,selBuf); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(verts),gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(locPos);   gl.vertexAttribPointer(locPos,3,gl.FLOAT,false,24,0);
+  gl.enableVertexAttribArray(locLight); gl.vertexAttribPointer(locLight,1,gl.FLOAT,false,24,12);
+  gl.enableVertexAttribArray(locUv);    gl.vertexAttribPointer(locUv,2,gl.FLOAT,false,24,16);
+  gl.drawArrays(gl.LINES,0,verts.length/6);
+}
+function render(){
+  gl.clearColor(FOGC[0],FOGC[1],FOGC[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  const proj=M4.perspective(75*Math.PI/180, cv.width/cv.height, 0.05, 80);
+  const d=dirVec(), ex=player.x, ey=player.y+EYE, ez=player.z;
+  const view=M4.lookAt(ex,ey,ez, ex+d[0],ey+d[1],ez+d[2], 0,1,0);
+  const mvp=M4.mul(proj,view);
+  gl.useProgram(prog);
+  gl.uniformMatrix4fv(locMvp,false,new Float32Array(mvp));
+  gl.uniform3fv(locFogc,FOGC); gl.uniform1f(locFn,16); gl.uniform1f(locFf,34);
+  // 不透明
+  gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
+  for(const ch of chunks) drawChunkBuf(ch.sb,ch.sn);
+  // 選択枠
+  drawSelection(mvp);
+  // 水（半透明・奥行きは書かない）
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+  for(const ch of chunks) drawChunkBuf(ch.wb,ch.wn);
+  gl.depthMask(true); gl.disable(gl.BLEND);
+}
+
+let state='ready', last=0;
+function loop(ts){ requestAnimationFrame(loop);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  if(state==='play'){ physics(dt); if(celebrateT>0)celebrateT-=dt; }
+  if(gl) render();
+}
+
+// ====================== 起動・リセット ======================
+function newWorld(){ genWorld(); buildAll(); respawn(); yaw=0.6; pitch=-0.15;
+  inv={}; selected=null; diamonds=0; updateHud(); buildPalette(); }
+function start(){ if(!gl)return; overlay.classList.add('hide'); state='play'; }
+startBtn.addEventListener('click',start);
+resetBtn.addEventListener('click',()=>{ newWorld(); });
+
+if(gl){ initProgram(); buildAtlas(); initChunks(); resize(); newWorld(); requestAnimationFrame(loop); }
+</script>
+</body>
+</html>

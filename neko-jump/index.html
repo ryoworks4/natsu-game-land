@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>ねこジャンプ 〜さかなをよけてゴール〜</title>
+<style>
+  :root { --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF; --ink:#2b3a67; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--ink);
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+  #hud { position:absolute; top:max(16px,env(safe-area-inset-top)); left:0; right:0; text-align:center;
+    color:var(--ink); font-weight:800; font-size:22px; pointer-events:none; text-shadow:0 2px 0 #fff; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:rgba(43,58,103,.42); color:#fff; text-align:center; padding:20px; }
+  #overlay h1 { font-size:30px; line-height:1.35; text-shadow:0 3px 0 rgba(0,0,0,.18); }
+  #overlay p { font-size:16px; opacity:.96; }
+  #btn { font-size:23px; font-weight:900; padding:15px 36px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  #btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+  .pop { position:absolute; font-weight:900; font-size:26px; color:var(--pop-red); text-shadow:0 2px 0 #fff;
+    pointer-events:none; transform:translate(-50%,-50%); animation:popUp .85s ease-out forwards; }
+  @keyframes popUp { 0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+    20%{opacity:1; transform:translate(-50%,-65%) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-160%) scale(1);} }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="hud"></div>
+<div id="overlay">
+  <h1 id="title">🐱 ねこジャンプ</h1>
+  <p id="desc">タップ（またはスペース）でジャンプ！<br>さかなをよけてゴールまで走ろう</p>
+  <button id="btn">スタート</button>
+</div>
+
+<script>
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const wrap=document.getElementById('wrap'), hud=document.getElementById('hud');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const PAL={red:'#FF6B6B',yellow:'#FFD93D',green:'#6BCB77',blue:'#4D96FF',ink:'#2b3a67'};
+
+let W,H,dpr,ground;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ground=H*0.80;
+}
+window.addEventListener('resize',resize); resize();
+
+const lerp=(a,b,t)=>a+(b-a)*t, rand=(a,b)=>a+Math.random()*(b-a);
+let shakeT=0,shakeMag=0; function shake(mag=5,dur=0.22){shakeMag=mag;shakeT=dur;}
+let particles=[];
+function burst(x,y,color,n=14){ for(let i=0;i<n;i++){const a=rand(0,Math.PI*2),s=rand(40,170);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-50,life:rand(.4,.8),t:0,c:color,r:rand(2,5)});}}
+function updateParticles(dt){ for(const p of particles){p.t+=dt;p.vy+=520*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;}
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();} ctx.globalAlpha=1; }
+function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
+  el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),900); }
+function groundShadow(x,y,w){ if(w<=0)return; ctx.fillStyle='rgba(43,58,103,.18)';
+  ctx.beginPath(); ctx.ellipse(x,y,w,w*0.28,0,0,7); ctx.fill(); }
+
+const GOAL=2400;
+let dist,speed,cat,fishes,spawnT,t,nextMile;
+function reset(){
+  dist=0; speed=190; t=0; spawnT=0.7; nextMile=300;
+  cat={x:W*0.24, y:ground, vy:0, onGround:true, sx:1, sy:1};
+  fishes=[]; particles=[];
+}
+function start(){ reset(); state='play'; overlay.classList.add('hide'); }
+function action(){
+  if(state==='play' && cat.onGround){
+    cat.vy=-560; cat.onGround=false; cat.sx=0.8; cat.sy=1.25;
+    burst(cat.x, ground+6, '#cdeeff', 8);
+  }
+}
+function gameOver(){ state='over'; shake(7,.3); burst(cat.x,cat.y-26,PAL.red,22);
+  title.textContent='🐟 さかなにぶつかった！';
+  desc.innerHTML=`がんばった距離：<b>${Math.floor(dist/10)}m</b><br>タップでジャンプ、もう一回！`;
+  btn.textContent='もう一回'; overlay.classList.remove('hide'); }
+function clearGame(){ state='clear';
+  for(let i=0;i<4;i++) setTimeout(()=>burst(rand(W*0.2,W*0.8),H*0.4,[PAL.red,PAL.yellow,PAL.green,PAL.blue][i],20),i*120);
+  title.textContent='🏁 ゴール！クリア！';
+  desc.innerHTML='すごい！さかなを全部よけたね🐟<br>もう一回あそぶ？';
+  btn.textContent='もう一回'; overlay.classList.remove('hide'); }
+function spawnFish(){ fishes.push({x:W+40, y:ground-10-rand(0,16)}); }
+
+cv.addEventListener('pointerdown',e=>{e.preventDefault(); if(state==='play')action();});
+window.addEventListener('keydown',e=>{ if(e.code==='Space'){e.preventDefault(); if(state==='play')action(); else start();}});
+btn.addEventListener('click',()=>{ if(state!=='play')start(); });
+
+function drawSky(){ const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#aee2ff'); g.addColorStop(.62,'#dff3ff'); g.addColorStop(1,'#ffe9b0');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='rgba(255,233,140,.55)'; ctx.beginPath(); ctx.arc(W*0.8,H*0.16,46,0,7); ctx.fill();
+  ctx.fillStyle='#fff2a8'; ctx.beginPath(); ctx.arc(W*0.8,H*0.16,26,0,7); ctx.fill();
+  const off=(state==='play'?dist*0.25:0);
+  ctx.fillStyle='rgba(255,255,255,.9)';
+  for(let i=0;i<3;i++){ const cx=((i*210 - off)%(W+220)+(W+220))%(W+220)-110; cloud(cx,H*0.18+i*44); }
+}
+function cloud(x,y){ ctx.beginPath(); ctx.arc(x,y,17,0,7); ctx.arc(x+20,y+5,23,0,7); ctx.arc(x+45,y,15,0,7);
+  ctx.rect(x,y,45,16); ctx.fill(); }
+function drawGround(){
+  ctx.fillStyle='#9be07a'; ctx.beginPath(); ctx.moveTo(0,ground+30);
+  ctx.quadraticCurveTo(W*0.5,ground-14,W,ground+30); ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#7fce5e'; ctx.fillRect(0,ground+24,W,H-ground);
+  ctx.fillStyle='#69bd48'; ctx.fillRect(0,ground+24,W,5);
+}
+function drawCat(){
+  const bob = cat.onGround ? Math.sin(t*9)*2 : 0;
+  cat.sx=lerp(cat.sx,1,0.18); cat.sy=lerp(cat.sy,1,0.18);
+  const cx=cat.x, cy=cat.y-26+bob;
+  groundShadow(cat.x, ground+8, 24*(cat.onGround?1:0.7));
+  ctx.save(); ctx.translate(cx,cy); ctx.scale(cat.sx,cat.sy); ctx.lineJoin='round';
+  const body='#ffb24d', line='#7a3e00';
+  ctx.strokeStyle=line; ctx.lineWidth=8; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(16,6); ctx.quadraticCurveTo(34,2,30,-16); ctx.stroke();
+  ctx.strokeStyle=body; ctx.lineWidth=4;
+  ctx.beginPath(); ctx.moveTo(16,6); ctx.quadraticCurveTo(34,2,30,-16); ctx.stroke();
+  ctx.fillStyle=body; ctx.strokeStyle=line; ctx.lineWidth=4;
+  ctx.beginPath(); ctx.ellipse(0,2,18,16,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0,-22,19,0,7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-15,-34); ctx.lineTo(-7,-44); ctx.lineTo(-3,-33); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(15,-34); ctx.lineTo(7,-44); ctx.lineTo(3,-33); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=line;
+  ctx.beginPath(); ctx.arc(-7,-24,3.4,0,7); ctx.fill();
+  ctx.beginPath(); ctx.arc(7,-24,3.4,0,7); ctx.fill();
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(-6,-25.4,1.2,0,7); ctx.fill();
+  ctx.beginPath(); ctx.arc(8,-25.4,1.2,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,107,107,.55)';
+  ctx.beginPath(); ctx.arc(-12,-19,3.2,0,7); ctx.fill();
+  ctx.beginPath(); ctx.arc(12,-19,3.2,0,7); ctx.fill();
+  ctx.strokeStyle=line; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,-19,2.6,0,Math.PI); ctx.stroke();
+  ctx.restore();
+}
+function drawFish(f){
+  ctx.save(); ctx.translate(f.x,f.y); ctx.lineJoin='round';
+  const body=PAL.blue, line='#1f4f9e';
+  ctx.fillStyle=body; ctx.strokeStyle=line; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.ellipse(0,0,15,10,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(12,0); ctx.lineTo(24,-9); ctx.lineTo(24,9); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(-6,-2,3.2,0,7); ctx.fill();
+  ctx.fillStyle=line; ctx.beginPath(); ctx.arc(-5,-2,1.6,0,7); ctx.fill();
+  ctx.restore();
+}
+function drawGoal(){ if(state!=='play'&&state!=='clear')return;
+  const gx=cat.x+(GOAL-dist); if(gx>W+50)return;
+  ctx.strokeStyle='#7a3e00'; ctx.lineWidth=4; ctx.beginPath(); ctx.moveTo(gx,ground+8); ctx.lineTo(gx,ground-58); ctx.stroke();
+  ctx.fillStyle=PAL.red; ctx.beginPath(); ctx.moveTo(gx,ground-58); ctx.lineTo(gx+30,ground-50); ctx.lineTo(gx,ground-40); ctx.closePath(); ctx.fill();
+}
+
+let state='ready', last=0;
+function loop(ts){
+  requestAnimationFrame(loop);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  ctx.save();
+  if(shakeT>0){ shakeT-=dt; const m=shakeMag; ctx.translate(rand(-m,m),rand(-m,m)); }
+  ctx.clearRect(0,0,W,H);
+  drawSky(); drawGround();
+
+  if(state==='play'){
+    t+=dt; dist+=speed*dt; speed=190+dist*0.07;
+    cat.vy+=1700*dt; cat.y+=cat.vy*dt;
+    if(cat.y>=ground){ if(!cat.onGround){cat.sx=1.25;cat.sy=0.78; burst(cat.x,ground+6,'#cdeeff',8);} cat.y=ground; cat.vy=0; cat.onGround=true; }
+    if(dist>=nextMile){ numberPop('+'+Math.floor(nextMile/10)+'m', cat.x, cat.y-70); nextMile+=300; }
+    spawnT-=dt; if(spawnT<=0 && dist<GOAL-500){ spawnFish(); spawnT=rand(0.8,1.4)-Math.min(0.5,dist/6000); }
+    for(const f of fishes){ f.x-=speed*dt;
+      const dx=f.x-cat.x, dy=(f.y-10)-(cat.y-26);
+      if(Math.abs(dx)<20 && Math.abs(dy)<24){ gameOver(); }
+    }
+    fishes=fishes.filter(f=>f.x>-50);
+    if(dist>=GOAL) clearGame();
+  }
+
+  for(const f of fishes) drawFish(f);
+  drawGoal(); drawCat();
+  updateParticles(dt); drawParticles();
+  ctx.restore();
+
+  hud.textContent = state==='play' ? `ゴールまで ${Math.min(100,Math.floor(dist/GOAL*100))}%` : '';
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>マイクラふう 立体ブロックビルダー</title>
+<style>
+  :root { --pop-yellow:#FFD93D; --ink:#2b3a67; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
+  html, body { height:100%; overflow:hidden; background:#0b1026;
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+
+  #topbar { position:absolute; top:max(10px,env(safe-area-inset-top)); left:0; right:0; z-index:5;
+    display:flex; align-items:center; justify-content:center; gap:8px; padding:0 10px; pointer-events:none; }
+  .tb { pointer-events:auto; font-size:16px; font-weight:800; padding:9px 14px; border:none; border-radius:12px;
+    color:#fff; box-shadow:0 4px 0 rgba(0,0,0,.22); }
+  .tb:active { transform:translateY(3px); box-shadow:0 1px 0 rgba(0,0,0,.22); }
+  #modeBtn.build { background:#3aa657; box-shadow:0 4px 0 #277a3e; }
+  #modeBtn.dig   { background:#e07b39; box-shadow:0 4px 0 #a85420; }
+  #rotBtn   { background:#4D96FF; box-shadow:0 4px 0 #2f6dca; }
+  #resetBtn { background:#fff; color:var(--ink); box-shadow:0 4px 0 #b9c4d8; }
+
+  #palette { position:absolute; bottom:0; left:0; right:0; z-index:5;
+    display:flex; justify-content:center; flex-wrap:wrap; gap:6px;
+    padding:8px 6px calc(8px + env(safe-area-inset-bottom)); background:rgba(20,28,46,.5); }
+  .sw { width:46px; height:46px; border-radius:10px; border:3px solid transparent;
+    box-shadow:inset 0 -6px 0 rgba(0,0,0,.22); }
+  .sw.sel { border-color:var(--pop-yellow); transform:translateY(-4px); }
+
+  #overlay { position:absolute; inset:0; z-index:10; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:16px; background:rgba(11,16,38,.72); color:#fff; text-align:center; padding:24px; }
+  #overlay h1 { font-size:30px; }
+  #overlay p { font-size:16px; line-height:1.7; opacity:.95; }
+  #startBtn { font-size:22px; font-weight:900; padding:14px 34px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; }
+  #startBtn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+
+<div id="topbar">
+  <button id="modeBtn" class="tb build">🧱 つくる</button>
+  <button id="rotBtn" class="tb">🔄 まわす</button>
+  <button id="resetBtn" class="tb">🌍 さいしょから</button>
+</div>
+<div id="palette"></div>
+
+<div id="overlay">
+  <h1>⛏️ 立体ブロックビルダー</h1>
+  <p>ブロックの うえを タップで つみあげる！<br>
+  「こわす」で けせる・「まわす」で ぐるっと・<br>
+  したの いろを えらんで じぶんの せかいを つくろう。</p>
+  <button id="startBtn">スタート</button>
+</div>
+
+<script>
+// すべてインライン・自己完結（外部 fetch / CDN / import なし）。
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const overlay=document.getElementById('overlay'), startBtn=document.getElementById('startBtn');
+const modeBtn=document.getElementById('modeBtn'), rotBtn=document.getElementById('rotBtn');
+const resetBtn=document.getElementById('resetBtn'), palette=document.getElementById('palette');
+
+const rand=(a,b)=>a+Math.random()*(b-a);
+
+// ===== 盤面（N×N の柱に積む立体ボクセル）=====
+const N=8, MAXH=10;
+const COLORS=[
+  {n:'みどり', c:'#6BCB77'}, {n:'あお', c:'#4D96FF'}, {n:'あか', c:'#FF6B6B'}, {n:'き', c:'#FFD93D'},
+  {n:'ちゃ', c:'#9a6b3f'}, {n:'はい', c:'#9aa0ab'}, {n:'しろ', c:'#eef2fa'}, {n:'みず', c:'#39c5c8'},
+];
+let stacks, rot=0, mode='build', selected=0;
+function idx(x,y){ return x*N+y; }
+function reset(){ stacks=[]; for(let i=0;i<N*N;i++) stacks.push([]); rot=0; }
+
+// ===== 投影（2:1アイソメ＋回転）=====
+let W,H,dpr,HW,HH,SIDE,OX,OY;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  HW=Math.floor((W*0.92)/(2*N)); HH=Math.floor(HW/2); SIDE=HW;
+  OX=W/2; OY=H*0.30;
+}
+window.addEventListener('resize',resize);
+
+function rc(x,y){ // 回転（[0,N]^2 を自分に写す）
+  if(rot===0) return [x,y];
+  if(rot===1) return [y, N-x];
+  if(rot===2) return [N-x, N-y];
+  return [N-y, x];
+}
+function project(x,y,z){ const r=rc(x,y); return [OX+(r[0]-r[1])*HW, OY+(r[0]+r[1])*HH - z*SIDE]; }
+function depth(x,y,z){ const r=rc(x+0.5,y+0.5); return (r[0]+r[1])*1000 + z; }
+
+// ===== 描画 =====
+let particles=[];
+function burst(x,y,color,n=8){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(40,150);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-40,life:rand(.35,.7),t:0,c:color,r:rand(2,4.5)}); } }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=560*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1; }
+
+function poly(pts, fill, darken){
+  ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]);
+  ctx.closePath(); ctx.fillStyle=fill; ctx.fill();
+  if(darken>0){ ctx.fillStyle='rgba(0,0,0,'+darken+')'; ctx.fill(); }
+  ctx.strokeStyle='rgba(0,0,0,.16)'; ctx.lineWidth=1; ctx.stroke();
+}
+function topFace(x,y,z){ return [project(x,y,z),project(x+1,y,z),project(x+1,y+1,z),project(x,y+1,z)]; }
+function cyAvg(q){ return (q[0][1]+q[1][1]+q[2][1]+q[3][1])/4; }
+function cxAvg(q){ return (q[0][0]+q[1][0]+q[2][0]+q[3][0])/4; }
+
+function drawCube(x,y,L,color){
+  const top=topFace(x,y,L+1);
+  // 4側面を作り、手前(画面下)の2枚だけ描く＝回転に強い
+  const sides=[
+    [project(x,y,L+1),  project(x,y+1,L+1),  project(x,y+1,L),  project(x,y,L)],
+    [project(x+1,y,L+1),project(x+1,y+1,L+1),project(x+1,y+1,L),project(x+1,y,L)],
+    [project(x,y,L+1),  project(x+1,y,L+1),  project(x+1,y,L),  project(x,y,L)],
+    [project(x,y+1,L+1),project(x+1,y+1,L+1),project(x+1,y+1,L),project(x,y+1,L)],
+  ].sort((a,b)=>cyAvg(b)-cyAvg(a)).slice(0,2);
+  sides.sort((a,b)=>cxAvg(a)-cxAvg(b));   // 左ほど濃く
+  poly(sides[0], color, 0.30);
+  poly(sides[1], color, 0.16);
+  poly(top, color, 0);
+}
+
+function draw(){
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#aee2ff'); g.addColorStop(.55,'#cdeeff'); g.addColorStop(1,'#e8f6ff');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // 床（チェック）→ 奥から
+  const floors=[];
+  for(let x=0;x<N;x++) for(let y=0;y<N;y++) floors.push({x,y,d:depth(x,y,0)});
+  floors.sort((a,b)=>a.d-b.d);
+  for(const f of floors){ const q=topFace(f.x,f.y,0);
+    poly(q, (f.x+f.y)%2? '#bfe6a6':'#aee098', 0); }
+
+  // ブロック → 奥から手前へ
+  const cubes=[];
+  for(let x=0;x<N;x++) for(let y=0;y<N;y++){ const st=stacks[idx(x,y)];
+    for(let L=0;L<st.length;L++) cubes.push({x,y,L,c:st[L],d:depth(x,y,L)}); }
+  cubes.sort((a,b)=>a.d-b.d);
+  for(const cu of cubes) drawCube(cu.x,cu.y,cu.L,cu.c);
+
+  drawParticles();
+}
+
+// ===== 当たり判定（上面のダイヤをタップ）=====
+function inPoly(px,py,p){ let c=false;
+  for(let i=0,j=p.length-1;i<p.length;j=i++){ const xi=p[i][0],yi=p[i][1],xj=p[j][0],yj=p[j][1];
+    if(((yi>py)!==(yj>py)) && (px < (xj-xi)*(py-yi)/(yj-yi)+xi)) c=!c; }
+  return c;
+}
+function pick(px,py){
+  let best=null, bestD=-1;
+  for(let x=0;x<N;x++) for(let y=0;y<N;y++){
+    const L=stacks[idx(x,y)].length;
+    const q=topFace(x,y,L);          // 空なら床(z0)、積んでいれば天面
+    if(inPoly(px,py,q)){ const d=depth(x,y,L); if(d>bestD){ bestD=d; best={x,y,L}; } }
+  }
+  return best;
+}
+function act(clientX,clientY){
+  const r=cv.getBoundingClientRect();
+  const hit=pick(clientX-r.left, clientY-r.top);
+  if(!hit) return;
+  const st=stacks[idx(hit.x,hit.y)];
+  const center=project(hit.x+0.5,hit.y+0.5, st.length);
+  if(mode==='build'){ if(st.length<MAXH){ st.push(COLORS[selected].c); burst(center[0],center[1],COLORS[selected].c,7); } }
+  else { if(st.length>0){ const c=st.pop(); burst(center[0],center[1],c,9); } }
+}
+cv.addEventListener('pointerdown', e=>{ e.preventDefault(); if(state==='play') act(e.clientX,e.clientY); });
+
+// ===== UI =====
+function setMode(m){ mode=m;
+  if(m==='build'){ modeBtn.textContent='🧱 つくる'; modeBtn.className='tb build'; }
+  else { modeBtn.textContent='⛏️ こわす'; modeBtn.className='tb dig'; }
+}
+modeBtn.addEventListener('click', ()=>setMode(mode==='build'?'dig':'build'));
+rotBtn.addEventListener('click', ()=>{ rot=(rot+1)%4; });
+resetBtn.addEventListener('click', ()=>reset());
+
+COLORS.forEach((b,i)=>{ const el=document.createElement('div');
+  el.className='sw'+(i===selected?' sel':''); el.style.background=b.c;
+  el.addEventListener('pointerdown', e=>{ e.preventDefault(); selected=i; setMode('build');
+    document.querySelectorAll('.sw').forEach((s,j)=>s.classList.toggle('sel', j===i)); });
+  palette.appendChild(el);
+});
+
+function start(){ overlay.classList.add('hide'); state='play'; }
+startBtn.addEventListener('click', start);
+window.addEventListener('keydown', e=>{ if(e.code==='Space'){ e.preventDefault(); start(); } });
+
+// ===== ループ =====
+let state='ready', last=0;
+function loop(ts){ requestAnimationFrame(loop);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  updateParticles(dt); draw();
+}
+resize(); reset(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>

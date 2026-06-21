@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>うちゅうシューティング</title>
+<style>
+  /* === ぷにぷにポップ 既定スタイル（工房ハウススタイル） === */
+  /* すべてインライン。外部CSS/フォント/画像は禁止＝オフラインで遊べる契約 */
+  :root {
+    --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF;
+    --ink:#2b3a67; --paper:#F2F7FF;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:#0b1026;
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }   /* タップ遅延ゼロ＋スクロール誤爆防止 */
+  #hud { position:absolute; top:max(14px,env(safe-area-inset-top)); left:0; right:0; text-align:center;
+    color:#fff; font-weight:800; font-size:20px; pointer-events:none; text-shadow:0 2px 6px #000; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:rgba(11,16,38,.62); color:#fff; text-align:center; padding:20px; }
+  #overlay h1 { font-size:30px; line-height:1.35; }
+  #overlay p { font-size:16px; opacity:.95; }
+  #btn { font-size:22px; font-weight:800; padding:14px 32px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  #btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+  .pop { position:absolute; font-weight:900; font-size:26px; color:var(--pop-yellow); text-shadow:0 2px 4px #000;
+    pointer-events:none; transform:translate(-50%,-50%); animation:popUp .8s ease-out forwards; }
+  @keyframes popUp { 0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+    20%{opacity:1; transform:translate(-50%,-60%) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-150%) scale(1);} }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="hud"></div>
+<!-- リスタート必須: ゲームオーバー/クリア後に必ず「もう一回」を出す -->
+<div id="overlay">
+  <h1 id="title">🚀 うちゅうシューティング</h1>
+  <p id="desc">ゆびで うちゅうせんを うごかそう！<br>たまは じどうで はっしゃ。てきを やっつけろ！</p>
+  <button id="btn">スタート</button>
+</div>
+
+<script>
+// ============ 工房エンジン v2（全ゲーム共通・流用する。外部依存ゼロ） ============
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const wrap=document.getElementById('wrap'), hud=document.getElementById('hud');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const PAL={ red:'#FF6B6B', yellow:'#FFD93D', green:'#6BCB77', blue:'#4D96FF', ink:'#2b3a67' };
+
+let W,H,dpr;
+function resize(){
+  dpr=window.devicePixelRatio||1;                 // Retina でぼやけない（必須）
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize); resize();
+
+// --- 数学・色ヘルパー ---
+const lerp=(a,b,t)=>a+(b-a)*t;
+const easeOut=t=>1-Math.pow(1-t,3);
+const easeOutBack=t=>1+2.7*Math.pow(t-1,3)+1.7*Math.pow(t-1,2);   // ぷにっと弾む
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+function shade(hex,amt){ // amt>0で明るく/<0で暗く（影・ハイライト用）
+  const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const f=v=>clamp(Math.round(v+(amt>0?(255-v)*amt:v*amt)),0,255);
+  return '#'+((1<<24)+(f(r)<<16)+(f(g)<<8)+f(b)).toString(16).slice(1);
+}
+
+// --- 形ヘルパー ---
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+// 接地影（shadowBlur は重いので半透明楕円で描く）
+function groundShadow(x,y,w){ if(w<=0)return; ctx.fillStyle='rgba(43,58,103,.18)';
+  ctx.beginPath(); ctx.ellipse(x,y,w,w*0.28,0,0,7); ctx.fill(); }
+// 安いグロー（shadowBlur 不使用＝層を重ねるだけ）。発光・キラ・太陽に
+function glow(x,y,r,color,layers=4){ for(let i=layers;i>=1;i--){ ctx.globalAlpha=0.12*(i/layers);
+  ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,r*(i/layers),0,7); ctx.fill(); } ctx.globalAlpha=1; }
+// かわいいキャラの土台（丸主体・太輪郭・白ハイライト・頬）。色1つ渡せば成立
+function drawBlob(x,y,r,color,o={}){
+  const line=o.line||shade(color,-0.45);
+  groundShadow(x,y+r*1.05,r*0.95);
+  ctx.lineJoin='round'; ctx.fillStyle=color; ctx.strokeStyle=line; ctx.lineWidth=Math.max(3,r*0.16);
+  ctx.beginPath(); ctx.ellipse(x,y,r,r*0.92,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=shade(color,0.35);                              // 上半分のハイライト帯
+  ctx.beginPath(); ctx.ellipse(x,y-r*0.4,r*0.7,r*0.35,0,0,Math.PI,true); ctx.fill();
+  const ex=r*0.36, ey=-r*0.12, er=Math.max(2.6,r*0.16);         // 目（大きく離す）
+  ctx.fillStyle=line; ctx.beginPath(); ctx.arc(x-ex,y+ey,er,0,7); ctx.arc(x+ex,y+ey,er,0,7); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath();                         // 白ハイライト
+  ctx.arc(x-ex+er*0.35,y+ey-er*0.4,er*0.4,0,7); ctx.arc(x+ex+er*0.35,y+ey-er*0.4,er*0.4,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,107,107,.5)';                          // 頬の赤み
+  ctx.beginPath(); ctx.arc(x-r*0.62,y+r*0.18,r*0.14,0,7); ctx.arc(x+r*0.62,y+r*0.18,r*0.14,0,7); ctx.fill();
+}
+
+// 画面ふちのうっすら暗がり（締まって見える）
+function vignette(){ const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.4,W/2,H/2,Math.max(W,H)*0.75);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(0,0,0,.4)'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+
+// --- ジュース：パーティクル・揺れ・数値ポップ ---
+let shakeT=0,shakeMag=0; function shake(mag=6,dur=0.25){ shakeMag=mag; shakeT=dur; }
+let particles=[];
+function burst(x,y,color,n=14){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(40,180);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rand(.4,.8),t:0,c:color,r:rand(2,5)}); } }
+function confetti(n=40){ for(let i=0;i<n;i++) particles.push({x:rand(0,W),y:rand(-40,0),
+  vx:rand(-30,30),vy:rand(60,160),life:rand(1.2,2),t:0,c:[PAL.red,PAL.yellow,PAL.green,PAL.blue][i%4],r:rand(3,5)}); }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=120*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1; }
+function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
+  el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),850); }
+
+// --- 状態・ループ（rAF + delta 駆動＝フレームレート非依存） ---
+let state='ready', last=0;
+function frame(ts){
+  requestAnimationFrame(frame);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  ctx.save();
+  if(shakeT>0){ shakeT-=dt; const m=shakeMag*(shakeT>0?1:0); ctx.translate(rand(-m,m),rand(-m,m)); }
+  updateParticles(dt);
+  render(dt);
+  ctx.restore();
+}
+requestAnimationFrame(frame);
+
+// ============ ここからゲーム固有（うちゅうシューティング） ============
+// 指で自機を左右に動かす／弾は自動発射／敵を撃ち落とす縦スクロール STG
+
+const player={ x:0, y:0, r:20 };
+let bullets=[], enemies=[], stars=[], score=0, lives=3, best=0;
+let fireTimer=0, spawnTimer=0, gameTime=0, hitFlash=0, invuln=0;
+let pointerX=null;
+
+// 星空（背景・下方向に流れる）
+function initStars(){ stars=[]; for(let i=0;i<70;i++) stars.push({
+  x:rand(0,W), y:rand(0,H), z:rand(0.3,1), }); }
+function drawSpace(dt){
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#0b1026'); g.addColorStop(1,'#1a1240');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  for(const s of stars){ s.y+=(20+s.z*70)*(state==='play'?dt:dt*0.3);
+    if(s.y>H){ s.y=-2; s.x=rand(0,W); }
+    ctx.globalAlpha=0.4+s.z*0.6; ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.z*1.8,0,7); ctx.fill(); }
+  ctx.globalAlpha=1;
+}
+
+// 自機（ロケット）を描く
+function drawShip(x,y,r){
+  glow(x,y+r*0.9,r*0.9,'#ffd27d',4);                 // 噴射のグロー
+  // 噴射炎
+  const flick=0.6+Math.sin(performance.now()/40)*0.4;
+  ctx.fillStyle='#ffb142';
+  ctx.beginPath(); ctx.moveTo(x-r*0.3,y+r*0.7); ctx.lineTo(x+r*0.3,y+r*0.7);
+  ctx.lineTo(x,y+r*(1.0+flick*0.7)); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#ffe08a';
+  ctx.beginPath(); ctx.moveTo(x-r*0.15,y+r*0.7); ctx.lineTo(x+r*0.15,y+r*0.7);
+  ctx.lineTo(x,y+r*(0.95+flick*0.45)); ctx.closePath(); ctx.fill();
+  // 機体
+  ctx.lineJoin='round'; ctx.lineWidth=Math.max(3,r*0.14);
+  ctx.fillStyle='#e8edff'; ctx.strokeStyle='#4D96FF';
+  ctx.beginPath();
+  ctx.moveTo(x,y-r);                                  // 先端
+  ctx.quadraticCurveTo(x+r*0.85,y-r*0.1, x+r*0.6,y+r*0.6);
+  ctx.lineTo(x-r*0.6,y+r*0.6);
+  ctx.quadraticCurveTo(x-r*0.85,y-r*0.1, x,y-r);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // 翼
+  ctx.fillStyle='#FF6B6B';
+  ctx.beginPath(); ctx.moveTo(x-r*0.55,y+r*0.1); ctx.lineTo(x-r*1.0,y+r*0.7); ctx.lineTo(x-r*0.5,y+r*0.6); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x+r*0.55,y+r*0.1); ctx.lineTo(x+r*1.0,y+r*0.7); ctx.lineTo(x+r*0.5,y+r*0.6); ctx.closePath(); ctx.fill();
+  // 窓
+  ctx.fillStyle='#4D96FF'; ctx.beginPath(); ctx.arc(x,y-r*0.05,r*0.28,0,7); ctx.fill();
+  ctx.fillStyle='#bfe0ff'; ctx.beginPath(); ctx.arc(x-r*0.08,y-r*0.13,r*0.12,0,7); ctx.fill();
+}
+
+const ENEMY_COLORS=[PAL.green,PAL.red,'#b388ff','#ff9ff3'];
+function spawnEnemy(){
+  const r=rand(16,22);
+  const tough=Math.random()<Math.min(0.35,gameTime/120); // 時間で硬い敵が増える
+  enemies.push({
+    x:rand(r+8,W-r-8), y:-r-4, r,
+    vy:rand(60,90)+gameTime*1.2,
+    sway:rand(0.6,1.6), phase:rand(0,7), baseX:0,
+    hp:tough?2:1, c:ENEMY_COLORS[(Math.random()*ENEMY_COLORS.length)|0],
+  });
+  enemies[enemies.length-1].baseX=enemies[enemies.length-1].x;
+}
+
+function start(){
+  state='play'; overlay.classList.add('hide');
+  bullets=[]; enemies=[]; particles=[];
+  score=0; lives=3; fireTimer=0; spawnTimer=0; gameTime=0; hitFlash=0; invuln=0;
+  player.r=20; player.y=H-Math.max(90,H*0.16); player.x=W/2; pointerX=null;
+  initStars(); updateHud();
+}
+
+function updateHud(){
+  hud.innerHTML='スコア '+score+'　'+'❤️'.repeat(Math.max(0,lives));
+}
+
+function loseLife(ex,ey){
+  if(invuln>0) return;
+  lives--; invuln=1.2; hitFlash=0.4; shake(12,0.35);
+  burst(ex,ey,PAL.red,20); updateHud();
+  if(lives<=0) gameOver();
+}
+
+function gameOver(){
+  state='over';
+  best=Math.max(best,score);
+  title.innerHTML='💥 ゲームオーバー';
+  desc.innerHTML='スコア <b>'+score+'</b>　ハイスコア <b>'+best+'</b><br>もういちど あそぼう！';
+  btn.textContent='もう一回';
+  overlay.classList.remove('hide');
+}
+
+// --- 入力：指（またはマウス）で自機を左右移動。弾は自動発射 ---
+function setPointer(e){ const r=cv.getBoundingClientRect(); pointerX=clamp(e.clientX-r.left,0,W); }
+cv.addEventListener('pointerdown', e=>{ e.preventDefault(); if(state==='play') setPointer(e); });
+cv.addEventListener('pointermove', e=>{ e.preventDefault(); if(state==='play'&&pointerX!==null) setPointer(e); });
+cv.addEventListener('pointerup',   e=>{ e.preventDefault(); });
+btn.addEventListener('click', ()=>{ if(state!=='play') start(); });
+window.addEventListener('keydown', e=>{   // PCプレビュー用：←→で操作
+  if(state!=='play'){ if(e.code==='Space'||e.code==='Enter') start(); return; }
+  if(e.code==='ArrowLeft') pointerX=(pointerX??player.x)-28;
+  if(e.code==='ArrowRight') pointerX=(pointerX??player.x)+28;
+  if(pointerX!=null) pointerX=clamp(pointerX,0,W);
+});
+
+function updatePlay(dt){
+  gameTime+=dt;
+  if(invuln>0) invuln-=dt;
+  if(hitFlash>0) hitFlash-=dt;
+
+  // 自機移動（指へなめらかに追従）
+  if(pointerX!=null) player.x=lerp(player.x, clamp(pointerX,player.r,W-player.r), Math.min(1,dt*14));
+
+  // 自動発射
+  fireTimer-=dt;
+  if(fireTimer<=0){ fireTimer=0.22;
+    bullets.push({x:player.x, y:player.y-player.r}); }
+
+  // 敵スポーン（時間で速くなる）
+  spawnTimer-=dt;
+  if(spawnTimer<=0){ spawnTimer=clamp(0.95-gameTime*0.012,0.32,0.95); spawnEnemy(); }
+
+  // 弾の移動
+  for(const b of bullets) b.y-=540*dt;
+  bullets=bullets.filter(b=>b.y>-20);
+
+  // 敵の移動
+  for(const e of enemies){
+    e.y+=e.vy*dt;
+    e.x=e.baseX+Math.sin(gameTime*e.sway+e.phase)*22;
+  }
+
+  // 当たり：弾 vs 敵
+  for(const e of enemies){
+    for(const b of bullets){
+      if(b.dead) continue;
+      const dx=b.x-e.x, dy=b.y-e.y;
+      if(dx*dx+dy*dy < (e.r+5)*(e.r+5)){
+        b.dead=true; e.hp--;
+        if(e.hp<=0){ e.dead=true; score+=10; burst(e.x,e.y,e.c,16); shake(4,0.12);
+          numberPop('+10', e.x, e.y); updateHud(); }
+        else { burst(b.x,b.y,'#fff',5); }
+      }
+    }
+  }
+  bullets=bullets.filter(b=>!b.dead);
+
+  // 当たり：敵 vs 自機 / 画面下到達
+  for(const e of enemies){
+    if(e.dead) continue;
+    const dx=player.x-e.x, dy=player.y-e.y;
+    if(dx*dx+dy*dy < (e.r+player.r*0.8)*(e.r+player.r*0.8)){
+      e.dead=true; loseLife(player.x,player.y);
+    } else if(e.y-e.r>H){
+      e.dead=true; loseLife(player.x,player.y);  // 逃した敵は1ミス
+    }
+  }
+  enemies=enemies.filter(e=>!e.dead);
+}
+
+function render(dt){
+  drawSpace(dt);
+
+  if(state==='play'||state==='over'){
+    // 弾
+    ctx.fillStyle='#FFD93D';
+    for(const b of bullets){ glow(b.x,b.y,7,'#fff3a8',3);
+      roundRect(b.x-3,b.y-9,6,16,3); ctx.fill(); }
+    // 敵（かわいいエイリアン）
+    for(const e of enemies){ drawBlob(e.x,e.y,e.r,e.c);
+      if(e.hp>1){ ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.globalAlpha=0.7;
+        ctx.beginPath(); ctx.arc(e.x,e.y,e.r+4,0,7); ctx.stroke(); ctx.globalAlpha=1; } }
+    // 自機（被弾中は点滅）
+    if(!(invuln>0 && Math.floor(performance.now()/80)%2===0)) drawShip(player.x,player.y,player.r);
+  }
+
+  if(state==='play') updatePlay(dt);
+
+  drawParticles();
+
+  // 被弾フラッシュ
+  if(hitFlash>0){ ctx.fillStyle='rgba(255,80,80,'+(hitFlash*0.6)+')'; ctx.fillRect(0,0,W,H); }
+
+  vignette();
+}
+</script>
+</body>
+</html>

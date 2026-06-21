@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>つなげけしパズル</title>
+<style>
+  :root {
+    --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF;
+    --pop-purple:#B984FF;
+    --ink:#2b3a67; --paper:#F2F7FF;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--ink);
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+  #hud { position:absolute; top:max(14px,env(safe-area-inset-top)); left:0; right:0; text-align:center;
+    color:var(--ink); font-weight:800; font-size:20px; pointer-events:none; text-shadow:0 1px 0 #fff; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:rgba(43,58,103,.45); color:#fff; text-align:center; padding:20px; }
+  #overlay h1 { font-size:30px; line-height:1.35; }
+  #overlay p { font-size:16px; opacity:.95; line-height:1.6; }
+  #btn { font-size:22px; font-weight:800; padding:14px 32px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  #btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+  .pop { position:absolute; font-weight:900; font-size:26px; color:var(--pop-red); text-shadow:0 2px 0 #fff;
+    pointer-events:none; transform:translate(-50%,-50%); animation:popUp .8s ease-out forwards; }
+  @keyframes popUp { 0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+    20%{opacity:1; transform:translate(-50%,-60%) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-150%) scale(1);} }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="hud"></div>
+<div id="overlay">
+  <h1 id="title">🧩 つなげけしパズル</h1>
+  <p id="desc">おなじ色のぷにを<br>2こいじょう つなげてタップ！<br>ぜんぶ けせたら 大ボーナス✨</p>
+  <button id="btn">スタート</button>
+</div>
+
+<script>
+// ============ 工房エンジン v2（共通・外部依存ゼロ） ============
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const wrap=document.getElementById('wrap'), hud=document.getElementById('hud');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const PAL={ red:'#FF6B6B', yellow:'#FFD93D', green:'#6BCB77', blue:'#4D96FF', purple:'#B984FF', ink:'#2b3a67' };
+
+let W,H,dpr;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize); resize();
+
+const lerp=(a,b,t)=>a+(b-a)*t;
+const easeOut=t=>1-Math.pow(1-t,3);
+const easeOutBack=t=>1+2.7*Math.pow(t-1,3)+1.7*Math.pow(t-1,2);
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+function shade(hex,amt){
+  const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const f=v=>clamp(Math.round(v+(amt>0?(255-v)*amt:v*amt)),0,255);
+  return '#'+((1<<24)+(f(r)<<16)+(f(g)<<8)+f(b)).toString(16).slice(1);
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function groundShadow(x,y,w){ if(w<=0)return; ctx.fillStyle='rgba(43,58,103,.18)';
+  ctx.beginPath(); ctx.ellipse(x,y,w,w*0.28,0,0,7); ctx.fill(); }
+function glow(x,y,r,color,layers=4){ for(let i=layers;i>=1;i--){ ctx.globalAlpha=0.12*(i/layers);
+  ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,r*(i/layers),0,7); ctx.fill(); } ctx.globalAlpha=1; }
+
+let bgScroll=0;
+function drawSky(top='#aee2ff',mid='#cdeeff',bot='#ffe9b0',sun=true){
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,top); g.addColorStop(.6,mid); g.addColorStop(1,bot);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  if(sun){ glow(W*0.8,H*0.12,46,'#fff2a8'); ctx.fillStyle='#fff2a8';
+    ctx.beginPath(); ctx.arc(W*0.8,H*0.12,24,0,7); ctx.fill(); }
+  ctx.fillStyle='rgba(255,255,255,.9)';
+  for(let i=0;i<3;i++){ const cx=((i*210-bgScroll)%(W+220)+(W+220))%(W+220)-110, cy=H*0.10+i*30;
+    ctx.beginPath(); ctx.arc(cx,cy,15,0,7); ctx.arc(cx+18,cy+4,20,0,7); ctx.arc(cx+40,cy,13,0,7);
+    ctx.rect(cx,cy,40,14); ctx.fill(); }
+}
+function vignette(){ const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.4,W/2,H/2,Math.max(W,H)*0.75);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(43,58,103,.18)'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+
+let shakeT=0,shakeMag=0; function shake(mag=6,dur=0.25){ shakeMag=mag; shakeT=dur; }
+let particles=[];
+function burst(x,y,color,n=14){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(40,180);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-40,life:rand(.4,.8),t:0,c:color,r:rand(2,5)}); } }
+function confetti(n=40){ for(let i=0;i<n;i++) particles.push({x:rand(0,W),y:rand(-40,0),
+  vx:rand(-30,30),vy:rand(60,160),life:rand(1.2,2),t:0,c:[PAL.red,PAL.yellow,PAL.green,PAL.blue,PAL.purple][i%5],r:rand(3,5)}); }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=520*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1; }
+function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
+  el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),850); }
+
+// --- 入力（Pointer に統一。座標も拾う） ---
+function onTap(e){ e.preventDefault();
+  const rect=cv.getBoundingClientRect();
+  const px=e.clientX-rect.left, py=e.clientY-rect.top;
+  if(state==='play') tapAt(px,py);
+}
+cv.addEventListener('pointerdown', onTap);
+btn.addEventListener('click', ()=>{ if(state!=='play') start(); });
+
+let state='ready', last=0;
+function frame(ts){
+  requestAnimationFrame(frame);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  bgScroll+=(state==='play'?20:12)*dt;
+  ctx.save();
+  if(shakeT>0){ shakeT-=dt; const m=shakeMag*(shakeT>0?1:0); ctx.translate(rand(-m,m),rand(-m,m)); }
+  updateParticles(dt);
+  render(dt);
+  ctx.restore();
+}
+requestAnimationFrame(frame);
+
+// ============ ここからゲーム固有：つなげけしパズル ============
+const COLS=7, ROWS=9;          // 盤面サイズ
+const COLORS=[PAL.red,PAL.yellow,PAL.green,PAL.blue,PAL.purple];
+let NCOL=4;                    // この回で使う色数（難度。スコアで増える）
+let grid=[];                   // grid[r][c] = {color, x,y(現在位置), tx,ty(目標), pop, popT} or null
+let score=0, best=0, gx0, gy0, cell, gw, gh;
+try{ best=parseInt(localStorage.getItem('tsunage_best')||'0',10)||0; }catch(e){}
+
+function layout(){
+  // 盤面を画面中央に。上に HUD ぶん余白、下にも余白。
+  const topPad=H*0.14, botPad=H*0.06;
+  const availH=H-topPad-botPad, availW=W-24;
+  cell=Math.floor(Math.min(availW/COLS, availH/ROWS));
+  gw=cell*COLS; gh=cell*ROWS;
+  gx0=(W-gw)/2; gy0=topPad+(availH-gh)/2;
+}
+
+function newBoard(){
+  layout();
+  grid=[];
+  for(let r=0;r<ROWS;r++){ grid[r]=[];
+    for(let c=0;c<COLS;c++){
+      const color=COLORS[Math.floor(rand(0,NCOL))];
+      grid[r][c]={ color, x:cellX(c), y:-cell*(r+2), tx:cellX(c), ty:cellY(r), pop:0, popT:0 };
+    }
+  }
+}
+const cellX=c=>gx0+c*cell+cell/2;
+const cellY=r=>gy0+r*cell+cell/2;
+
+function start(){
+  state='play'; overlay.classList.add('hide');
+  score=0; NCOL=4; particles=[];
+  newBoard();
+  updateHud();
+}
+
+function updateHud(){ hud.innerHTML=`スコア ${score}　🏆 ${best}`; }
+
+// タップ位置 → セル → 同色つながりを消す
+function tapAt(px,py){
+  if(anyMoving()) return;           // 落下アニメ中は受けない
+  const c=Math.floor((px-gx0)/cell), r=Math.floor((py-gy0)/cell);
+  if(c<0||c>=COLS||r<0||r>=ROWS) return;
+  if(!grid[r][c]) return;
+  const group=floodGroup(r,c);
+  if(group.length<2){ shake(3,0.12); return; }   // 1個では消えない
+  clearGroup(group);
+}
+
+function floodGroup(r,c){
+  const color=grid[r][c].color;
+  const seen=new Set(), out=[]; const stack=[[r,c]];
+  while(stack.length){
+    const [rr,cc]=stack.pop(); const key=rr*COLS+cc;
+    if(seen.has(key)) continue; seen.add(key);
+    const cellObj=grid[rr][cc]; if(!cellObj||cellObj.color!==color) continue;
+    out.push([rr,cc]);
+    if(rr>0) stack.push([rr-1,cc]);
+    if(rr<ROWS-1) stack.push([rr+1,cc]);
+    if(cc>0) stack.push([rr,cc-1]);
+    if(cc<COLS-1) stack.push([rr,cc+1]);
+  }
+  return out;
+}
+
+function clearGroup(group){
+  const n=group.length;
+  const gain=n*(n+1);            // つなげるほど高得点（2個=6, 5個=30…）
+  // 中心でポップ演出
+  let mx=0,my=0;
+  for(const [r,c] of group){ const g=grid[r][c]; mx+=g.x; my+=g.y;
+    burst(g.x, g.y, g.color, 6); grid[r][c]=null; }
+  mx/=n; my/=n;
+  const sc=cv.getBoundingClientRect();
+  numberPop('+'+gain, sc.left+mx, sc.top+my);
+  score+=gain; if(score>best){ best=score; try{ localStorage.setItem('tsunage_best',best);}catch(e){} }
+  shake(Math.min(3+n,10), 0.2);
+  collapse();
+  updateHud();
+  // 難度アップ：スコアが伸びたら色を増やす（最大5色）
+  if(score>200 && NCOL<5) NCOL=5;
+  // 詰みチェックは落下が終わってから（checkDeadlock）
+  pendingDeadlockCheck=true;
+}
+
+// 重力で詰める → 空き列を左に寄せる
+function collapse(){
+  for(let c=0;c<COLS;c++){
+    let write=ROWS-1;
+    for(let r=ROWS-1;r>=0;r--){
+      if(grid[r][c]){
+        if(write!==r){ grid[write][c]=grid[r][c]; grid[r][c]=null; }
+        grid[write][c].ty=cellY(write);
+        write--;
+      }
+    }
+  }
+  // 空っぽの列を左へ寄せる
+  let cols=[];
+  for(let c=0;c<COLS;c++){ if(grid[ROWS-1][c]) cols.push(c); }
+  if(cols.length<COLS){
+    const newGrid=[]; for(let r=0;r<ROWS;r++) newGrid[r]=new Array(COLS).fill(null);
+    cols.forEach((srcC,destC)=>{
+      for(let r=0;r<ROWS;r++){ if(grid[r][srcC]){ newGrid[r][destC]=grid[r][srcC];
+        newGrid[r][destC].tx=cellX(destC); } }
+    });
+    grid=newGrid;
+  }
+}
+
+let pendingDeadlockCheck=false;
+function anyMoving(){
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){ const g=grid[r][c];
+    if(g && (Math.abs(g.x-g.tx)>0.5 || Math.abs(g.y-g.ty)>0.5)) return true; }
+  return false;
+}
+function countRemaining(){ let n=0; for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) if(grid[r][c]) n++; return n; }
+function hasMove(){
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){ const g=grid[r][c]; if(!g) continue;
+    if(c<COLS-1 && grid[r][c+1] && grid[r][c+1].color===g.color) return true;
+    if(r<ROWS-1 && grid[r+1][c] && grid[r+1][c].color===g.color) return true; }
+  return false;
+}
+
+function finish(allCleared){
+  state='over';
+  if(allCleared){ score+=300; if(score>best){best=score; try{localStorage.setItem('tsunage_best',best);}catch(e){}}
+    confetti(60); }
+  updateHud();
+  title.innerHTML = allCleared ? '🎉 ぜんぶ けせた！<br>＋300ボーナス' : 'おしまい！';
+  desc.innerHTML = `スコア <b>${score}</b><br>さいこう記録 ${best}`;
+  btn.textContent='もう一回';
+  overlay.classList.remove('hide');
+}
+
+function drawPuni(x,y,r,color){
+  const line=shade(color,-0.45);
+  groundShadow(x,y+r*0.95,r*0.85);
+  ctx.lineJoin='round'; ctx.fillStyle=color; ctx.strokeStyle=line; ctx.lineWidth=Math.max(2.4,r*0.15);
+  ctx.beginPath(); ctx.ellipse(x,y,r,r*0.92,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=shade(color,0.38);
+  ctx.beginPath(); ctx.ellipse(x,y-r*0.4,r*0.62,r*0.3,0,0,Math.PI,true); ctx.fill();
+  const ex=r*0.34, ey=-r*0.08, er=Math.max(2,r*0.15);
+  ctx.fillStyle=line; ctx.beginPath(); ctx.arc(x-ex,y+ey,er,0,7); ctx.arc(x+ex,y+ey,er,0,7); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath();
+  ctx.arc(x-ex+er*0.3,y+ey-er*0.35,er*0.38,0,7); ctx.arc(x+ex+er*0.3,y+ey-er*0.35,er*0.38,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,107,107,.45)';
+  ctx.beginPath(); ctx.arc(x-r*0.58,y+r*0.2,r*0.12,0,7); ctx.arc(x+r*0.58,y+r*0.2,r*0.12,0,7); ctx.fill();
+}
+
+function render(dt){
+  drawSky();
+
+  if(state==='ready'){
+    // 待機デモ：ぷにがぷかぷか
+    const t=performance.now()/1000;
+    for(let i=0;i<5;i++){ const x=W*(0.2+i*0.15), y=H*0.6+Math.sin(t*2+i)*8;
+      drawPuni(x,y,22,COLORS[i]); }
+    drawParticles(); vignette(); return;
+  }
+
+  // 盤面の枠
+  ctx.fillStyle='rgba(43,58,103,.10)';
+  roundRect(gx0-8,gy0-8,gw+16,gh+16,16); ctx.fill();
+
+  // ぷにを目標位置へなめらかに移動
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){ const g=grid[r][c]; if(!g) continue;
+    g.x+=(g.tx-g.x)*Math.min(1,dt*14);
+    g.y+=(g.ty-g.y)*Math.min(1,dt*14);
+  }
+  // 描画
+  const rad=cell*0.42;
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){ const g=grid[r][c]; if(!g) continue;
+    drawPuni(g.x,g.y,rad,g.color);
+  }
+
+  drawParticles();
+
+  // 落下が止まったら詰み/全消し判定
+  if(state==='play' && pendingDeadlockCheck && !anyMoving()){
+    pendingDeadlockCheck=false;
+    if(countRemaining()===0){ finish(true); }
+    else if(!hasMove()){ finish(false); }
+  }
+  vignette();
+}
+</script>
+</body>
+</html>

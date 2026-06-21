@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>未来のぼく・わたしカード</title>
+<style>
+  :root { --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF; --ink:#2b3a67; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:#0b1026;
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; color:var(--ink); }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+  .layer { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:16px; text-align:center; padding:22px; }
+  .layer.hide { display:none !important; }
+  h1 { font-size:26px; text-shadow:0 2px 0 #fff; }
+  .q { font-size:21px; font-weight:900; text-shadow:0 2px 0 #fff; }
+  .qn { font-size:14px; opacity:.8; }
+  .opts { display:flex; flex-direction:column; gap:10px; width:100%; max-width:340px; }
+  .opt { font-size:17px; font-weight:800; padding:14px; border:none; border-radius:16px; background:#fff;
+    color:var(--ink); box-shadow:0 5px 0 rgba(43,58,103,.18); cursor:pointer; }
+  .opt:active { transform:translateY(3px); box-shadow:0 2px 0 rgba(43,58,103,.18); }
+  input { font-size:18px; padding:12px 14px; border-radius:12px; border:2px solid #cfe0f5; width:100%; max-width:300px; text-align:center; }
+  .btn { font-size:22px; font-weight:900; padding:14px 32px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer; }
+  .btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .tip { font-size:13px; opacity:.8; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+
+<div class="layer" id="start">
+  <h1>🔮 未来のぼく・わたしカード</h1>
+  <p style="font-size:15px;text-shadow:0 1px 0 #fff">4つの しつもんに こたえると<br>きみの「みらいのしごと」カードが できるよ！</p>
+  <input id="name" placeholder="なまえを入れてね（にっくねーむOK）" maxlength="10">
+  <button class="btn" id="go">はじめる</button>
+  <div class="tip">なまえは この端末にだけ ほぞん・送信しません</div>
+</div>
+
+<div class="layer hide" id="quiz">
+  <div class="qn" id="qn"></div>
+  <div class="q" id="qtext"></div>
+  <div class="opts" id="opts"></div>
+</div>
+
+<div class="layer hide" id="resultLayer">
+  <button class="btn" id="again">🔁 もう一回</button>
+  <div class="tip">📸 スクショして 持ち帰ろう！</div>
+</div>
+
+<script>
+// すべてインライン・自己完結（外部 fetch / CDN / import / LLM なし）。なまえは localStorage のみ・外部送信なし。
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+let W,H,dpr;
+function resize(){ dpr=window.devicePixelRatio||1; W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px'; cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0); }
+window.addEventListener('resize',()=>{ resize(); if(state==='result') drawCard(); });
+resize();
+const rand=(a,b)=>a+Math.random()*(b-a);
+let particles=[];
+function burst(x,y,color,n=18){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(60,230);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-70,life:rand(.7,1.2),t:0,c:color,r:rand(3,6)}); } }
+
+// ===== 診断（ローカル重みづけ・6タイプ）=====
+const TYPES={
+  tsukuru:{n:'つくる人', emoji:'🛠️', color:'#FF8C42', jobs:'エンジニア・大工・デザイナー・ものづくり職人',
+    cheer:'アイデアを 形にする力が ぴかいち！「あったらいいな」を つくり出す人になれるよ。'},
+  tasukeru:{n:'たすける人', emoji:'💗', color:'#FF6B6B', jobs:'お医者さん・看護師・先生・かいごの人',
+    cheer:'人の気もちに 気づける やさしさが すごい！だれかを 笑顔にする仕事が きっと合うよ。'},
+  shiraberu:{n:'しらべる人', emoji:'🔬', color:'#4D96FF', jobs:'研究者・科学者・たんてい・お医者さん',
+    cheer:'「なんで？」を とことん 追いかける力がある！世界の ふしぎを ときあかす人だ。'},
+  tsutaeru:{n:'つたえる人', emoji:'🎤', color:'#9b59ff', jobs:'YouTuber・アナウンサー・作家・先生',
+    cheer:'思ったことを 伝えるのが 得意！みんなを わくわくさせる 言葉の達人になれる。'},
+  sodateru:{n:'そだてる人', emoji:'🌱', color:'#6BCB77', jobs:'飼育員・農家・パティシエ・トリマー',
+    cheer:'いきものや 植物を 大切にできる！じっくり 育てて 大きくする仕事が ぴったり。'},
+  mamoru:{n:'まもる人', emoji:'🛡️', color:'#39c5c8', jobs:'けいさつ・しょうぼうし・スポーツ選手・パイロット',
+    cheer:'こまっている人を ほっとけない 勇気がある！みんなを まもる ヒーローになれる。'},
+};
+const Q=[
+ {q:'休みの日 なにしてると わくわくする？', o:[
+   ['ブロックや工作で なにか作る','tsukuru',2],['だれかと あそぶ・お世話する','tasukeru',2],
+   ['図かんや どうがで しらべる','shiraberu',2],['歌う・話す・はっぴょうする','tsutaeru',2]]},
+ {q:'クラスでは どんなタイプ？', o:[
+   ['アイデアを 出す人','tsukuru',2],['みんなを まとめる人','tsutaeru',1],
+   ['こまった子を たすける人','tasukeru',2],['ルールを まもる人','mamoru',2]]},
+ {q:'これ すき！っていうのは？', o:[
+   ['きかい・パソコン・ロボット','tsukuru',2],['どうぶつ・むし・しょくぶつ','sodateru',2],
+   ['うちゅう・じっけん・なぞ','shiraberu',2],['スポーツ・体をうごかす','mamoru',2]]},
+ {q:'大きくなったら どんな自分？', o:[
+   ['すごいものを つくった人','tsukuru',1],['みんなを 笑顔にした人','tasukeru',2],
+   ['だれも しらないことを 見つけた人','shiraberu',2],['世界に 名前が知られた人','tsutaeru',2]]},
+];
+
+let state='start', qi=0, scores={}, myName='';
+const startL=document.getElementById('start'), quizL=document.getElementById('quiz'),
+      resL=document.getElementById('resultLayer');
+
+document.getElementById('go').addEventListener('click', ()=>{
+  myName=(document.getElementById('name').value||'きみ').trim().slice(0,10)||'きみ';
+  try{ localStorage.setItem('mirai_name', myName); }catch(e){}
+  for(const k in TYPES) scores[k]=0; qi=0; state='quiz';
+  startL.classList.add('hide'); quizL.classList.remove('hide'); renderQ();
+});
+try{ const s=localStorage.getItem('mirai_name'); if(s) document.getElementById('name').value=s; }catch(e){}
+
+function renderQ(){
+  const cur=Q[qi];
+  document.getElementById('qn').textContent=`しつもん ${qi+1} / ${Q.length}`;
+  document.getElementById('qtext').textContent=cur.q;
+  const box=document.getElementById('opts'); box.innerHTML='';
+  cur.o.forEach(([label,type,w])=>{ const b=document.createElement('button'); b.className='opt'; b.textContent=label;
+    b.onclick=()=>{ scores[type]=(scores[type]||0)+w; qi++;
+      if(qi>=Q.length){ finish(); } else renderQ(); }; box.appendChild(b); });
+}
+
+function finish(){
+  let best='tsukuru', bv=-1; for(const k in TYPES){ const v=scores[k]||0; if(v>bv){ bv=v; best=k; } }
+  state='result'; result=TYPES[best];
+  quizL.classList.add('hide'); resL.classList.remove('hide');
+  drawCard();
+  burst(W/2, H*0.35, result.color, 24); burst(W/2, H*0.35, '#FFD93D', 18);
+}
+
+let result=null;
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function drawCard(){
+  // 背景
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#dff3ff'); g.addColorStop(1,'#cfe9ff');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  // カード（縦長）
+  const cw=Math.min(W-44, 340), ch=Math.min(H-150, 470), cx=(W-cw)/2, cy=(H-ch)/2-10;
+  ctx.save();
+  ctx.shadowColor='rgba(43,58,103,.25)'; ctx.shadowBlur=0; ctx.shadowOffsetY=8;
+  ctx.fillStyle='#fff'; roundRect(cx,cy,cw,ch,24); ctx.fill();
+  ctx.restore();
+  ctx.lineWidth=6; ctx.strokeStyle=result.color; roundRect(cx+5,cy+5,cw-10,ch-10,20); ctx.stroke();
+
+  ctx.textAlign='center';
+  ctx.fillStyle=result.color; ctx.font='900 19px sans-serif';
+  ctx.fillText('みらいの しごと しんだん', W/2, cy+42);
+  // 名前
+  ctx.fillStyle='#2b3a67'; ctx.font='900 24px sans-serif';
+  ctx.fillText(myName+' の みらいは…', W/2, cy+78);
+  // 大絵文字
+  ctx.font='86px serif'; ctx.fillText(result.emoji, W/2, cy+170);
+  // タイプ名
+  ctx.fillStyle=result.color; ctx.font='900 30px sans-serif';
+  ctx.fillText(result.n, W/2, cy+212);
+  // 応援文（折り返し）
+  ctx.fillStyle='#2b3a67'; ctx.font='15px sans-serif';
+  wrapText(result.cheer, W/2, cy+248, cw-52, 23);
+  // 職業例
+  ctx.fillStyle=result.color; ctx.font='800 13px sans-serif';
+  ctx.fillText('▼ こんな しごと', W/2, cy+ch-72);
+  ctx.fillStyle='#2b3a67'; ctx.font='14px sans-serif';
+  wrapText(result.jobs, W/2, cy+ch-50, cw-52, 20);
+
+  // 紙ふぶき
+  for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life); ctx.fillStyle=p.c;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1;
+}
+function wrapText(text,cxp,y,maxW,lh){
+  const chars=[...text]; let line='', yy=y;
+  for(const ch of chars){ const test=line+ch;
+    if(ctx.measureText(test).width>maxW && line){ ctx.fillText(line,cxp,yy); line=ch; yy+=lh; }
+    else line=test; }
+  if(line) ctx.fillText(line,cxp,yy);
+}
+
+document.getElementById('again').addEventListener('click', ()=>{
+  state='start'; resL.classList.add('hide'); startL.classList.remove('hide'); particles=[];
+});
+
+let last=0;
+function loop(ts){ requestAnimationFrame(loop);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  for(const p of particles){ p.t+=dt; p.vy+=480*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life);
+  if(state==='start' || state==='quiz'){
+    const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#dff3ff'); g.addColorStop(1,'#eafff0');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  } else if(state==='result'){ drawCard(); }
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>へやから だっしゅつ！</title>
+<style>
+  :root{ --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF;
+    --ink:#2b3a67; }
+  *{ margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ height:100%; overflow:hidden; background:#1a2238;
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas{ display:block; touch-action:none; }
+  /* 上部バナー：状態と今のヒント */
+  #hud{ position:absolute; top:max(10px,env(safe-area-inset-top)); left:0; right:0; text-align:center;
+    color:#fff; font-weight:800; pointer-events:none; padding:0 12px; }
+  #status{ font-size:20px; text-shadow:0 2px 4px rgba(0,0,0,.5); }
+  #msg{ display:inline-block; margin-top:8px; font-size:16px; background:rgba(43,58,103,.85);
+    color:#fff; padding:8px 16px; border-radius:999px; min-height:0; transition:opacity .25s; }
+  /* スタート / クリア オーバーレイ */
+  #overlay{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:rgba(26,34,56,.72); color:#fff; text-align:center; padding:24px; }
+  #overlay h1{ font-size:30px; line-height:1.4; }
+  #overlay p{ font-size:16px; opacity:.95; line-height:1.7; }
+  .btn{ font-size:22px; font-weight:800; padding:14px 34px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  .btn:active{ transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide{ display:none !important; }
+  /* 金庫のテンキー */
+  #pad{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:14px; background:rgba(26,34,56,.85); padding:24px; }
+  #pad h2{ color:#fff; font-size:22px; font-weight:800; }
+  #padDisp{ width:200px; height:60px; border-radius:14px; background:#0d1322; color:var(--pop-green);
+    font-size:38px; font-weight:900; letter-spacing:6px; display:flex; align-items:center;
+    justify-content:center; box-shadow:inset 0 3px 8px rgba(0,0,0,.6); }
+  #padGrid{ display:grid; grid-template-columns:repeat(3,72px); gap:12px; }
+  .key{ height:72px; border:none; border-radius:16px; background:#e8eefc; color:var(--ink);
+    font-size:30px; font-weight:900; box-shadow:0 5px 0 #aab6d8; cursor:pointer; }
+  .key:active{ transform:translateY(3px); box-shadow:0 2px 0 #aab6d8; }
+  .key.act{ background:var(--pop-blue); color:#fff; box-shadow:0 5px 0 #2e63b8; }
+  .key.act:active{ box-shadow:0 2px 0 #2e63b8; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="hud"><div id="status"></div><div id="msg"></div></div>
+
+<!-- 金庫テンキー -->
+<div id="pad" class="hide">
+  <h2>🔢 きんこの ばんごう</h2>
+  <div id="padDisp">--</div>
+  <div id="padGrid"></div>
+</div>
+
+<!-- スタート / クリア -->
+<div id="overlay">
+  <h1 id="title">🚪 へやから だっしゅつ！</h1>
+  <p id="desc">へやの なかを タップして しらべよう。<br>かぎを 2つ あつめて ドアを あけてね。</p>
+  <button id="btn" class="btn">スタート</button>
+</div>
+
+<script>
+// ============ 工房エンジン（テンプレ流用・外部依存ゼロ） ============
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const statusEl=document.getElementById('status'), msgEl=document.getElementById('msg');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const pad=document.getElementById('pad'), padDisp=document.getElementById('padDisp'), padGrid=document.getElementById('padGrid');
+const PAL={ red:'#FF6B6B', yellow:'#FFD93D', green:'#6BCB77', blue:'#4D96FF', ink:'#2b3a67' };
+
+let W,H,dpr;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize); resize();
+
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+function shade(hex,amt){ const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const f=v=>clamp(Math.round(v+(amt>0?(255-v)*amt:v*amt)),0,255);
+  return '#'+((1<<24)+(f(r)<<16)+(f(g)<<8)+f(b)).toString(16).slice(1); }
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+let shakeT=0,shakeMag=0; function shake(mag=8,dur=0.3){ shakeMag=mag; shakeT=dur; }
+let particles=[];
+function burst(x,y,color,n=16){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(50,200);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-40,life:rand(.4,.9),t:0,c:color,r:rand(3,6)}); } }
+function confetti(n=60){ for(let i=0;i<n;i++) particles.push({x:rand(0,W),y:rand(-40,0),
+  vx:rand(-40,40),vy:rand(80,200),life:rand(1.4,2.4),t:0,c:[PAL.red,PAL.yellow,PAL.green,PAL.blue][i%4],r:rand(3,6)}); }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=560*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1; }
+
+// ============ ゲーム固有 ============
+// 仕掛け：はちうえ→かぎ① / えとほんに数字のヒント / きんこに番号を入れてかぎ② / ドアは2つで開く
+const CODE="25";                 // え=2, ほん=5 → きんこ番号
+let state='ready';
+let g;                            // ゲーム状態
+function newGame(){ return {
+  keys:0, plantDone:false, picSeen:false, bookSeen:false, safeOpen:false, escaped:false,
+  padBuf:''
+};}
+
+// 当たり判定用ホットスポット（W,H から毎フレーム算出）
+function spots(){
+  return {
+    pic:    {x:W*0.40, y:H*0.20, w:W*0.22, h:H*0.16},   // え（数字2）
+    book:   {x:W*0.06, y:H*0.34, w:W*0.30, h:H*0.30},   // ほんだな（数字5）
+    plant:  {x:W*0.10, y:H*0.66, w:W*0.20, h:H*0.20},   // はちうえ（かぎ①）
+    safe:   {x:W*0.40, y:H*0.62, w:W*0.24, h:H*0.20},   // きんこ（かぎ②）
+    door:   {x:W*0.70, y:H*0.30, w:W*0.26, h:H*0.50},   // ドア（だっしゅつ）
+  };
+}
+function inSpot(s,x,y){ return x>=s.x && x<=s.x+s.w && y>=s.y && y<=s.y+s.h; }
+
+let msgT=0;
+function say(t){ msgEl.textContent=t; msgEl.style.opacity='1'; msgT=3.2; }
+function updateStatus(){ statusEl.textContent='🔑 みつけた かぎ '+g.keys+' / 2'; }
+
+function start(){
+  g=newGame(); state='play'; overlay.classList.add('hide'); pad.classList.add('hide');
+  updateStatus(); say('へやの なかを タップして しらべよう');
+}
+
+// --- タップ：座標でホットスポット判定 ---
+function tap(e){
+  e.preventDefault();
+  if(state!=='play') return;
+  const r=cv.getBoundingClientRect();
+  const x=e.clientX-r.left, y=e.clientY-r.top;
+  const s=spots();
+  if(inSpot(s.plant,x,y)){
+    if(!g.plantDone){ g.plantDone=true; g.keys++; updateStatus(); burst(x,y,PAL.green); shake(6,.2);
+      say('🔑 はちうえの したに かぎが あった！'); }
+    else say('はちうえ：もう なにも ないよ');
+  }else if(inSpot(s.pic,x,y)){
+    g.picSeen=true; burst(x,y,PAL.yellow); say('🖼️ えに「2」と かいてある…');
+  }else if(inSpot(s.book,x,y)){
+    g.bookSeen=true; burst(x,y,PAL.blue); say('📚 ほんに「5」と かいてある…');
+  }else if(inSpot(s.safe,x,y)){
+    if(g.safeOpen){ say('きんこ：もう あいてるよ'); }
+    else openPad();
+  }else if(inSpot(s.door,x,y)){
+    if(g.keys>=2){ win(x,y); }
+    else { shake(7,.25); say('🚪 ドアは しまってる。かぎが 2つ いるよ'); }
+  }else{
+    say('なにも なさそう…');
+  }
+}
+cv.addEventListener('pointerdown', tap);
+btn.addEventListener('click', start);
+
+// --- 金庫テンキー ---
+function buildPad(){
+  padGrid.innerHTML='';
+  const layout=['1','2','3','4','5','6','7','8','9','C','0','OK'];
+  for(const k of layout){
+    const b=document.createElement('button'); b.className='key'; b.textContent=k;
+    if(k==='C'||k==='OK') b.classList.add('act');
+    b.addEventListener('click',()=>padPress(k));
+    padGrid.appendChild(b);
+  }
+}
+function openPad(){ g.padBuf=''; drawPad(); pad.classList.remove('hide'); }
+function drawPad(){ padDisp.textContent = g.padBuf ? g.padBuf : '--'; }
+function padPress(k){
+  if(k==='C'){ g.padBuf=''; drawPad(); return; }
+  if(k==='OK'){
+    if(g.padBuf===CODE){
+      g.safeOpen=true; g.keys++; updateStatus(); pad.classList.add('hide');
+      burst(W*0.52,H*0.72,PAL.yellow,24); shake(8,.3); say('🔑 きんこが あいた！かぎ ゲット！');
+    }else{ shake(8,.3); g.padBuf=''; drawPad(); say('❌ ちがう ばんごう…えと ほんを しらべよう'); }
+    return;
+  }
+  if(g.padBuf.length<2){ g.padBuf+=k; drawPad(); }
+}
+buildPad();
+
+function win(x,y){
+  state='win'; g.escaped=true; confetti(80); burst(x,y,PAL.yellow,24);
+  title.textContent='🎉 だっしゅつ せいこう！';
+  desc.innerHTML='おめでとう！<br>へやから でられたよ。';
+  btn.textContent='もう一回';
+  setTimeout(()=>overlay.classList.remove('hide'),700);
+}
+
+// ============ 描画 ============
+function bgRoom(){
+  // 壁
+  const g1=ctx.createLinearGradient(0,0,0,H);
+  g1.addColorStop(0,'#cbb89a'); g1.addColorStop(1,'#b39e7c');
+  ctx.fillStyle=g1; ctx.fillRect(0,0,W,H);
+  // 床
+  const fy=H*0.72;
+  const g2=ctx.createLinearGradient(0,fy,0,H);
+  g2.addColorStop(0,'#8a6f4e'); g2.addColorStop(1,'#6e5739');
+  ctx.fillStyle=g2; ctx.fillRect(0,fy,W,H-fy);
+  ctx.strokeStyle='rgba(60,40,20,.25)'; ctx.lineWidth=2;
+  for(let i=1;i<6;i++){ const lx=i*W/6; ctx.beginPath(); ctx.moveTo(lx,fy); ctx.lineTo(lx*0.6+W*0.2,H); ctx.stroke(); }
+  ctx.beginPath(); ctx.moveTo(0,fy); ctx.lineTo(W,fy); ctx.stroke();
+}
+function label(cx,y,text){
+  ctx.font='700 13px -apple-system,sans-serif'; ctx.textAlign='center';
+  ctx.fillStyle='rgba(43,58,103,.85)'; ctx.fillText(text,cx,y);
+}
+function emoji(ch,cx,cy,size){
+  ctx.font=size+'px -apple-system,"Apple Color Emoji",sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(ch,cx,cy);
+  ctx.textBaseline='alphabetic';
+}
+function drawObjects(){
+  const s=spots();
+  // え（絵・数字2）
+  let o=s.pic; ctx.fillStyle='#5a3d22'; roundRect(o.x,o.y,o.w,o.h,8); ctx.fill();
+  ctx.fillStyle='#f4ead2'; roundRect(o.x+6,o.y+6,o.w-12,o.h-12,5); ctx.fill();
+  if(g&&g.picSeen){ ctx.fillStyle=PAL.red; ctx.font='900 '+Math.round(o.h*0.6)+'px -apple-system,sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('2',o.x+o.w/2,o.y+o.h/2); ctx.textBaseline='alphabetic'; }
+  else emoji('🖼️',o.x+o.w/2,o.y+o.h/2,Math.round(o.h*0.7));
+  // ほんだな（数字5）
+  o=s.book; ctx.fillStyle='#7a5230'; roundRect(o.x,o.y,o.w,o.h,8); ctx.fill();
+  ctx.fillStyle='#5e3f24'; ctx.fillRect(o.x+6,o.y+o.h*0.5-3,o.w-12,6);
+  const cols=[PAL.red,PAL.yellow,PAL.green,PAL.blue,'#c084fc'];
+  for(let i=0;i<5;i++){ ctx.fillStyle=cols[i]; const bw=(o.w-20)/5;
+    ctx.fillRect(o.x+10+i*bw, o.y+10, bw-4, o.h*0.5-18); }
+  if(g&&g.bookSeen){ ctx.fillStyle='#fff'; ctx.font='900 18px -apple-system,sans-serif';
+    ctx.textAlign='center'; ctx.fillText('5',o.x+o.w/2,o.y+o.h*0.42); }
+  emoji('📚',o.x+o.w/2,o.y+o.h*0.78,Math.round(o.w*0.3));
+  label(o.x+o.w/2,o.y+o.h+16,'ほんだな');
+  // はちうえ
+  o=s.plant; emoji(g&&g.plantDone?'🪴':'🪴',o.x+o.w/2,o.y+o.h*0.5,Math.round(o.h*0.85));
+  if(g&&!g.plantDone) emoji('✨',o.x+o.w*0.82,o.y+o.h*0.2,Math.round(o.h*0.3));
+  label(o.x+o.w/2,o.y+o.h+2,'はちうえ');
+  // きんこ
+  o=s.safe; ctx.fillStyle=g&&g.safeOpen?'#9aa6c0':'#3b4763'; roundRect(o.x,o.y,o.w,o.h,10); ctx.fill();
+  ctx.strokeStyle='#222a3d'; ctx.lineWidth=3; roundRect(o.x+6,o.y+6,o.w-12,o.h-12,7); ctx.stroke();
+  emoji(g&&g.safeOpen?'🔓':'🔒',o.x+o.w*0.5,o.y+o.h*0.5,Math.round(o.h*0.5));
+  label(o.x+o.w/2,o.y+o.h+16,'きんこ');
+  // ドア
+  o=s.door; ctx.fillStyle='#8a5a2b'; roundRect(o.x,o.y,o.w,o.h,8); ctx.fill();
+  ctx.strokeStyle='#5e3d1c'; ctx.lineWidth=4; roundRect(o.x+8,o.y+8,o.w-16,o.h-16,6); ctx.stroke();
+  ctx.fillStyle=PAL.yellow; ctx.beginPath(); ctx.arc(o.x+o.w*0.18,o.y+o.h*0.52,7,0,7); ctx.fill();
+  emoji(g&&g.keys>=2?'🚪':'🚪',o.x+o.w/2,o.y+o.h*0.32,Math.round(o.w*0.5));
+  label(o.x+o.w/2,o.y+o.h+18,'ドア'+(g&&g.keys>=2?'（あけられる！）':''));
+}
+
+let last=0;
+function frame(ts){
+  requestAnimationFrame(frame);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  if(msgT>0){ msgT-=dt; if(msgT<=0){ msgEl.style.opacity='0'; } }
+  ctx.save();
+  if(shakeT>0){ shakeT-=dt; const m=shakeMag*(shakeT>0?1:0); ctx.translate(rand(-m,m),rand(-m,m)); }
+  bgRoom();
+  if(g) drawObjects();
+  updateParticles(dt); drawParticles();
+  ctx.restore();
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

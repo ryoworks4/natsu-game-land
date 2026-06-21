@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>ぷにスマッシュ</title>
+<style>
+  :root {
+    --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF;
+    --ink:#2b3a67; --paper:#F2F7FF;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--ink);
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:16px; background:rgba(43,58,103,.5); color:#fff; text-align:center; padding:20px; }
+  #overlay h1 { font-size:30px; line-height:1.35; }
+  #overlay p { font-size:15px; opacity:.95; line-height:1.6; }
+  #btn { font-size:22px; font-weight:800; padding:14px 32px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  #btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+  .pop { position:absolute; font-weight:900; font-size:24px; color:var(--pop-red); text-shadow:0 2px 0 #fff;
+    pointer-events:none; transform:translate(-50%,-50%); animation:popUp .8s ease-out forwards; }
+  @keyframes popUp { 0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+    20%{opacity:1; transform:translate(-50%,-60%) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-150%) scale(1);} }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="overlay">
+  <h1 id="title">💥 ぷにスマッシュ</h1>
+  <p id="desc">あいてをステージのそとへふっとばせ！<br>
+    ダメージ％がたまるほど とおくへふっとぶ。<br>
+    ← → でうごく ・ ⬆でジャンプ（2かいまで）・ 👊でパンチ</p>
+  <button id="btn">スタート</button>
+</div>
+
+<script>
+// ============ 工房エンジン v2（共通・外部依存ゼロ） ============
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const wrap=document.getElementById('wrap');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const PAL={ red:'#FF6B6B', yellow:'#FFD93D', green:'#6BCB77', blue:'#4D96FF', ink:'#2b3a67' };
+
+let W,H,dpr;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  layout();
+}
+window.addEventListener('resize',resize);
+
+const lerp=(a,b,t)=>a+(b-a)*t;
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+function shade(hex,amt){
+  const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const f=v=>clamp(Math.round(v+(amt>0?(255-v)*amt:v*amt)),0,255);
+  return '#'+((1<<24)+(f(r)<<16)+(f(g)<<8)+f(b)).toString(16).slice(1);
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function groundShadow(x,y,w){ if(w<=0)return; ctx.fillStyle='rgba(43,58,103,.18)';
+  ctx.beginPath(); ctx.ellipse(x,y,w,w*0.28,0,0,7); ctx.fill(); }
+function glow(x,y,r,color,layers=4){ for(let i=layers;i>=1;i--){ ctx.globalAlpha=0.12*(i/layers);
+  ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,r*(i/layers),0,7); ctx.fill(); } ctx.globalAlpha=1; }
+function drawBlob(x,y,r,color,emoji,facing,o={}){
+  const line=o.line||shade(color,-0.45);
+  groundShadow(x,y+r*1.05,r*0.95);
+  ctx.lineJoin='round'; ctx.fillStyle=color; ctx.strokeStyle=line; ctx.lineWidth=Math.max(3,r*0.16);
+  ctx.beginPath(); ctx.ellipse(x,y,r,r*0.92,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=shade(color,0.35);
+  ctx.beginPath(); ctx.ellipse(x,y-r*0.4,r*0.7,r*0.35,0,0,Math.PI,true); ctx.fill();
+  if(emoji){ ctx.font=Math.round(r*0.95)+'px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.save(); if(facing<0){ ctx.translate(x*2,0); ctx.scale(-1,1);} ctx.fillText(emoji,x,y+r*0.05); ctx.restore(); }
+  ctx.fillStyle='rgba(255,107,107,.5)';
+  ctx.beginPath(); ctx.arc(x-r*0.62,y+r*0.30,r*0.13,0,7); ctx.arc(x+r*0.62,y+r*0.30,r*0.13,0,7); ctx.fill();
+}
+
+let bgScroll=0;
+function drawSky(top='#9fd8ff',mid='#cdeeff',bot='#ffe9b0'){
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,top); g.addColorStop(.6,mid); g.addColorStop(1,bot);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='rgba(255,255,255,.85)';
+  for(let i=0;i<3;i++){ const cx=((i*230-bgScroll)%(W+240)+(W+240))%(W+240)-120, cy=H*0.10+i*40;
+    ctx.beginPath(); ctx.arc(cx,cy,17,0,7); ctx.arc(cx+20,cy+5,23,0,7); ctx.arc(cx+45,cy,15,0,7);
+    ctx.rect(cx,cy,45,16); ctx.fill(); }
+}
+function vignette(){ const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.4,W/2,H/2,Math.max(W,H)*0.75);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(43,58,103,.18)'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+
+let shakeT=0,shakeMag=0; function shake(mag=6,dur=0.25){ shakeMag=Math.max(shakeMag,mag); shakeT=Math.max(shakeT,dur); }
+let particles=[];
+function burst(x,y,color,n=14){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(60,220);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-40,life:rand(.4,.8),t:0,c:color,r:rand(2,5)}); } }
+function confetti(n=50){ for(let i=0;i<n;i++) particles.push({x:rand(0,W),y:rand(-40,0),
+  vx:rand(-30,30),vy:rand(60,160),life:rand(1.2,2),t:0,c:[PAL.red,PAL.yellow,PAL.green,PAL.blue][i%4],r:rand(3,5)}); }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=520*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1; }
+function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
+  el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),850); }
+
+// ============ ゲーム固有：スマブラ風アクション ============
+const ROSTER=[
+  {name:'ファイ', color:PAL.red,    emoji:'🔥'},
+  {name:'アクア', color:PAL.blue,   emoji:'💧'},
+];
+const GRAV=2000, MOVE=215, AIR=160, JUMP=660, FRICTION=0.80, R=26;
+const PAD=150;              // 操作ボタン帯の高さ
+let platforms=[], deathY=0, leftKO=-60, rightKO=0;
+let CTRL={};               // ボタン領域
+
+function layout(){
+  // ステージ：メイン浮島＋左右の小足場（操作帯の上に収める）
+  const fieldH=H-PAD;
+  const mainW=Math.min(W*0.64,300), mainX=(W-mainW)/2, mainTop=fieldH*0.78;
+  const sideW=Math.min(W*0.24,110), sideTop=fieldH*0.52;
+  platforms=[
+    {x:mainX, y:mainTop, w:mainW},
+    {x:W*0.05, y:sideTop, w:sideW},
+    {x:W*0.95-sideW, y:sideTop, w:sideW},
+  ];
+  deathY=H+40; rightKO=W+60;
+  // 操作ボタン（下帯）
+  const by=H-PAD+14, bh=PAD-26, half=W/2;
+  const mb=Math.min((half-30)/2,90);
+  CTRL={
+    left:  {x:14,            y:by, w:mb, h:bh, label:'←'},
+    right: {x:14+mb+12,      y:by, w:mb, h:bh, label:'→'},
+    jump:  {x:W-14-mb*2-12,  y:by, w:mb, h:bh, label:'⬆'},
+    atk:   {x:W-14-mb,       y:by, w:mb, h:bh, label:'👊'},
+  };
+}
+
+let state='ready';
+let p1=null, cpu=null, winnerName='';
+
+function mkFighter(def,x,side){
+  return {...def, x, y:-50, vx:0, vy:0, dmg:0, face:(side==='L'?1:-1), side,
+    jumps:2, onGround:false, stocks:3, atkT:0, atkCd:0, hitstun:0, invul:1.0,
+    flashKO:0, lastHitId:0 };
+}
+
+function start(){
+  state='play'; overlay.classList.add('hide');
+  p1 =mkFighter(ROSTER[0], W*0.35,'L');
+  cpu=mkFighter(ROSTER[1], W*0.65,'R');
+  cpu.isCPU=true;
+  particles=[];
+  for(const k in held) held[k]=false; pointerMap.clear();
+}
+
+function respawn(f){
+  f.x=W/2; f.y=-30; f.vx=0; f.vy=0; f.dmg=0; f.jumps=2; f.onGround=false;
+  f.hitstun=0; f.atkT=0; f.invul=1.4;
+}
+
+function landOnPlatforms(f,prevFeet){
+  if(f.vy<0) return false;
+  const feet=f.y+R;
+  for(const pl of platforms){
+    if(f.x>pl.x-6 && f.x<pl.x+pl.w+6 && prevFeet<=pl.y+2 && feet>=pl.y){
+      f.y=pl.y-R; f.vy=0; f.onGround=true; f.jumps=2; return true;
+    }
+  }
+  return false;
+}
+
+function applyHit(att,def){
+  if(def.invul>0) return;
+  const add=Math.round(rand(7,13));
+  def.dmg+=add;
+  // ノックバック：ダメージ％が高いほど大きい（スマブラの核）
+  const power=4.2 + def.dmg*0.085;
+  const dir=att.face;
+  def.vx=dir*power*60;
+  def.vy=-(2.6+def.dmg*0.05)*60;
+  def.hitstun=0.28; def.onGround=false; def.invul=0.15;
+  const hx=def.x, hy=def.y;
+  burst(hx,hy,PAL.yellow,18); shake(6+def.dmg*0.06,0.25);
+  numberPop(def.dmg+'%', hx, hy-36);
+}
+
+function doAttack(f){
+  if(f.atkCd>0||f.hitstun>0) return;
+  f.atkT=0.18; f.atkCd=0.34;
+  const reach=R*2.3, other=(f===p1)?cpu:p1;
+  const dx=(other.x-f.x)*f.face;        // 前方距離
+  if(dx>-R*0.6 && dx<reach && Math.abs(other.y-f.y)<R*1.6){
+    applyHit(f,other);
+  }
+}
+
+function jump(f){
+  if(f.jumps>0 && f.hitstun<=0){
+    f.vy=-JUMP; f.onGround=false; f.jumps--;
+    burst(f.x,f.y+R,'#ffffff',6);
+  }
+}
+
+function koCheck(f){
+  if(f.x<leftKO || f.x>rightKO || f.y>deathY || f.y<-260){
+    f.stocks--;
+    burst(clamp(f.x,10,W-10),clamp(f.y,10,H-10),f.color,26); shake(12,0.4);
+    if(f.stocks<=0){ endGame(); return; }
+    respawn(f);
+  }
+}
+
+function endGame(){
+  state='over';
+  const pAlive=p1.stocks>0, cAlive=cpu.stocks>0;
+  const win = pAlive && !cAlive ? true : (!pAlive && cAlive ? false : p1.stocks>cpu.stocks);
+  winnerName = win ? p1.name : cpu.name;
+  if(win) confetti(60); else shake(14,0.5);
+  setTimeout(()=>{
+    title.textContent = win ? '🏆 かち！' : '😢 まけ…';
+    desc.innerHTML = (win? p1.name+' のしょうり！' : cpu.name+' にやられた…')+'<br>もういちどたたかう？';
+    btn.textContent='もういちど';
+    overlay.classList.remove('hide');
+  },1100);
+}
+
+function updateFighter(f,dt){
+  if(f.atkT>0) f.atkT-=dt;
+  if(f.atkCd>0) f.atkCd-=dt;
+  if(f.invul>0) f.invul-=dt;
+  if(f.hitstun>0) f.hitstun-=dt;
+
+  // 入力（CPU は AI、p1 はボタン）
+  let mv=0, wantJump=false, wantAtk=false;
+  if(f.isCPU){ const a=cpuThink(f,dt); mv=a.mv; wantJump=a.jump; wantAtk=a.atk; }
+  else {
+    if(held.left) mv-=1; if(held.right) mv+=1;
+  }
+  if(f.hitstun<=0 && mv!==0) f.face=mv>0?1:-1;
+
+  const sp=f.onGround?MOVE:AIR;
+  if(f.hitstun<=0){
+    if(mv!==0) f.vx=lerp(f.vx, mv*sp, f.onGround?0.4:0.12);
+    else if(f.onGround) f.vx*=FRICTION;
+  }
+  if(wantJump) jump(f);
+  if(wantAtk) doAttack(f);
+
+  f.vy+=GRAV*dt;
+  const prevFeet=f.y+R;
+  f.x+=f.vx*dt; f.y+=f.vy*dt;
+  f.onGround=false;
+  landOnPlatforms(f,prevFeet);
+  if(f.onGround && f.hitstun<=0) f.hitstun=0; // noop keeps clarity
+
+  koCheck(f);
+}
+
+// シンプルCPU
+function cpuThink(f,dt){
+  const t=p1; const dx=t.x-f.x, dy=t.y-f.y, adx=Math.abs(dx);
+  let mv=0,jump=false,atk=false;
+  // 落ちそうなら中央へ戻る
+  const onAir=!f.onGround;
+  if(f.x<platforms[0].x+10) mv=1;
+  else if(f.x>platforms[0].x+platforms[0].w-10) mv=-1;
+  else mv = dx>10?1 : dx<-10?-1 : 0;
+  // 相手が上にいる、または自分が場外側で落下中ならジャンプ
+  f._jt=(f._jt||0)-dt;
+  if(f._jt<=0){
+    if((dy<-30 && adx<80) || (onAir && (f.x<60||f.x>W-60))){ jump=true; f._jt=0.5; }
+  }
+  // 近ければ攻撃
+  if(adx<R*2.1 && Math.abs(dy)<R*1.6 && f.atkCd<=0 && Math.random()<0.6) atk=true;
+  // 反応に少しムラ
+  if(Math.random()<0.04) mv=0;
+  return {mv,jump,atk};
+}
+
+// --- 入力（マルチタッチ対応） ---
+const held={left:false,right:false};
+const pointerMap=new Map(); // pointerId -> ctrlKey
+function ctrlAt(px,py){
+  for(const k in CTRL){ const b=CTRL[k];
+    if(px>=b.x&&px<=b.x+b.w&&py>=b.y&&py<=b.y+b.h) return k; }
+  return null;
+}
+cv.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  const r=cv.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
+  if(state!=='play') return;
+  const k=ctrlAt(px,py); if(!k) return;
+  pointerMap.set(e.pointerId,k);
+  if(k==='left') held.left=true;
+  else if(k==='right') held.right=true;
+  else if(k==='jump') jump(p1);
+  else if(k==='atk') doAttack(p1);
+});
+function release(e){
+  const k=pointerMap.get(e.pointerId); if(!k) return;
+  pointerMap.delete(e.pointerId);
+  if(k==='left') held.left=false; else if(k==='right') held.right=false;
+}
+cv.addEventListener('pointerup',release);
+cv.addEventListener('pointercancel',release);
+cv.addEventListener('pointerleave',release);
+btn.addEventListener('click',()=>{ if(state!=='play') start(); });
+
+// --- 描画 ---
+function drawPlatform(pl){
+  const h=18;
+  ctx.fillStyle=PAL.green; roundRect(pl.x,pl.y,pl.w,h,9); ctx.fill();
+  ctx.fillStyle=shade(PAL.green,0.25); roundRect(pl.x+3,pl.y+2,pl.w-6,6,4); ctx.fill();
+  ctx.fillStyle=shade('#8a5a2b',0); roundRect(pl.x+6,pl.y+h-2,pl.w-12,10,5); ctx.fill();
+}
+function drawFighter(f){
+  if(f.invul>0 && Math.floor(performance.now()/80)%2===0) ctx.globalAlpha=0.45;
+  drawBlob(f.x,f.y,R,f.color,f.emoji,f.face);
+  // パンチエフェクト
+  if(f.atkT>0){ const fx=f.x+f.face*R*1.5;
+    glow(fx,f.y,R*0.8,PAL.yellow,3);
+    ctx.fillStyle='#fff'; ctx.font='800 22px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('💢',fx,f.y-R*0.2);
+  }
+  ctx.globalAlpha=1;
+}
+function drawDmgHUD(f,x){
+  // ％（ダメージ高いほど赤く）
+  const hot=clamp(f.dmg/150,0,1);
+  const col=`rgb(${Math.round(lerp(43,255,hot))},${Math.round(lerp(58,80,hot))},${Math.round(lerp(103,60,hot))})`;
+  ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+  ctx.fillStyle=col; ctx.font='900 30px sans-serif';
+  ctx.fillText(f.dmg+'%', x, 40);
+  ctx.fillStyle=PAL.ink; ctx.font='800 13px sans-serif';
+  ctx.fillText(f.name, x, 56);
+  // ストック（丸アイコン）
+  for(let i=0;i<3;i++){ ctx.beginPath();
+    ctx.fillStyle = i<f.stocks ? f.color : 'rgba(43,58,103,.2)';
+    ctx.arc(x-16+i*16, 66, 5, 0,7); ctx.fill(); }
+}
+function drawCtrl(){
+  ctx.fillStyle='rgba(43,58,103,.10)'; ctx.fillRect(0,H-PAD,W,PAD);
+  for(const k in CTRL){ const b=CTRL[k];
+    const c = k==='atk'?PAL.red : k==='jump'?PAL.blue : '#ffffff';
+    ctx.globalAlpha = (held[k]|| (pointerMapHas(k)))?0.95:0.8;
+    ctx.fillStyle=c; roundRect(b.x,b.y,b.w,b.h,16); ctx.fill();
+    ctx.strokeStyle=shade(c==='#ffffff'?PAL.ink:c,-0.3); ctx.lineWidth=3; roundRect(b.x,b.y,b.w,b.h,16); ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.fillStyle=PAL.ink; ctx.font='800 30px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(b.label, b.x+b.w/2, b.y+b.h/2);
+  }
+}
+function pointerMapHas(k){ for(const v of pointerMap.values()) if(v===k) return true; return false; }
+
+function render(dt){
+  drawSky();
+  if(state==='play'||state==='over'){
+    if(state==='play'){ updateFighter(p1,dt); updateFighter(cpu,dt); }
+    for(const pl of platforms) drawPlatform(pl);
+    // 奥に居る方を先に
+    const order=[p1,cpu].sort((a,b)=>a.y-b.y);
+    for(const f of order) drawFighter(f);
+    drawParticles();
+    drawDmgHUD(p1, W*0.28);
+    drawDmgHUD(cpu, W*0.72);
+    drawCtrl();
+    vignette(); return;
+  }
+  // ready デモ
+  const t=performance.now()/1000;
+  for(const pl of [{x:W*0.18,y:H*0.6,w:W*0.64}]) drawPlatform(pl);
+  drawBlob(W*0.36,H*0.6-R-2+Math.sin(t*3)*3,R,PAL.red,'🔥',1);
+  drawBlob(W*0.64,H*0.6-R-2+Math.sin(t*3+1)*3,R,PAL.blue,'💧',-1);
+  drawParticles(); vignette();
+}
+
+// --- ループ ---
+let last=0;
+function frame(ts){
+  requestAnimationFrame(frame);
+  const dt=last?Math.min((ts-last)/1000,0.033):0; last=ts;
+  bgScroll+=10*dt;
+  ctx.save();
+  if(shakeT>0){ shakeT-=dt; const m=shakeMag*(shakeT>0?1:0); ctx.translate(rand(-m,m),rand(-m,m)); if(shakeT<=0)shakeMag=0; }
+  updateParticles(dt);
+  render(dt);
+  ctx.restore();
+}
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

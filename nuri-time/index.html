@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>ぬりぬりタイム 〜30びょうでなんパーセント？〜</title>
+<style>
+  :root { --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF; --ink:#2b3a67; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--ink);
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+  #hud { position:absolute; top:max(16px,env(safe-area-inset-top)); left:0; right:0; text-align:center;
+    color:var(--ink); font-weight:800; font-size:22px; pointer-events:none; text-shadow:0 2px 0 #fff; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:rgba(43,58,103,.42); color:#fff; text-align:center; padding:20px; }
+  #overlay h1 { font-size:30px; line-height:1.35; text-shadow:0 3px 0 rgba(0,0,0,.18); }
+  #overlay p { font-size:16px; opacity:.96; }
+  #btn { font-size:23px; font-weight:900; padding:15px 36px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  #btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+  .pop { position:absolute; font-weight:900; font-size:24px; color:var(--pop-blue); text-shadow:0 2px 0 #fff;
+    pointer-events:none; transform:translate(-50%,-50%); animation:popUp .85s ease-out forwards; }
+  @keyframes popUp { 0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+    20%{opacity:1; transform:translate(-50%,-65%) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-160%) scale(1);} }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="hud"></div>
+<div id="overlay">
+  <h1 id="title">🎨 ぬりぬりタイム</h1>
+  <p id="desc">ゆびでなぞって、ましかくを ぬろう！<br>30びょうで なんパーセント ぬれるかな？</p>
+  <button id="btn">スタート</button>
+</div>
+
+<script>
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const wrap=document.getElementById('wrap'), hud=document.getElementById('hud');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const PAL={red:'#FF6B6B',yellow:'#FFD93D',green:'#6BCB77',blue:'#4D96FF',ink:'#2b3a67'};
+
+let W,H,dpr,board;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  layout();
+}
+window.addEventListener('resize',resize);
+
+const rand=(a,b)=>a+Math.random()*(b-a);
+let particles=[];
+function burst(x,y,color,n=6){ for(let i=0;i<n;i++){const a=rand(0,Math.PI*2),s=rand(30,110);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-40,life:rand(.3,.6),t:0,c:color,r:rand(2,4)});}}
+function updateParticles(dt){ for(const p of particles){p.t+=dt;p.vy+=480*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;}
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();} ctx.globalAlpha=1; }
+function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
+  el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),900); }
+
+// ===== 盤面（塗るグリッド）=====
+const TIME=30, COLOR=PAL.blue;
+let cols, rows, cell, cells, filledCount, timeLeft, popped;
+function layout(){
+  const pad=18, top=70;
+  board={x:pad, y:top, w:W-pad*2, h:H-top-pad};
+  cols=10; cell=board.w/cols; rows=Math.floor(board.h/cell); board.h=rows*cell;
+}
+function reset(){
+  cells=new Array(cols*rows).fill(false); filledCount=0; timeLeft=TIME; popped={};
+  particles=[];
+}
+function start(){ if(!board)layout(); reset(); state='play'; overlay.classList.add('hide'); }
+
+function paintAt(clientX,clientY){
+  const r=cv.getBoundingClientRect();
+  const x=clientX-r.left-board.x, y=clientY-r.top-board.y;
+  if(x<0||y<0||x>=board.w||y>=board.h) return;
+  const ci=Math.floor(x/cell), ri=Math.floor(y/cell), idx=ri*cols+ci;
+  if(!cells[idx]){ cells[idx]=true; filledCount++;
+    burst(board.x+ci*cell+cell/2, board.y+ri*cell+cell/2, COLOR, 5);
+    const pct=Math.floor(filledCount/(cols*rows)*100);
+    if(pct>0 && pct%25===0 && !popped[pct]){ popped[pct]=true; numberPop(pct+'%！', W/2, H*0.4); }
+  }
+}
+let painting=false;
+cv.addEventListener('pointerdown',e=>{ e.preventDefault(); if(state!=='play')return; painting=true; paintAt(e.clientX,e.clientY); });
+cv.addEventListener('pointermove',e=>{ if(painting&&state==='play') paintAt(e.clientX,e.clientY); });
+window.addEventListener('pointerup',()=>painting=false);
+window.addEventListener('keydown',e=>{ if(e.code==='Space'){e.preventDefault(); if(state!=='play')start();}});
+btn.addEventListener('click',()=>{ if(state!=='play')start(); });
+
+function finish(){ state='over'; const pct=Math.floor(filledCount/(cols*rows)*100);
+  let msg = pct>=90?'パーフェクト！🌟': pct>=70?'すごい！じょうず！': pct>=40?'いいかんじ！':'もういちど ちょうせん！';
+  title.textContent=`🎨 ${pct}% ぬれた！`;
+  desc.innerHTML=`${msg}<br>もういちど あそぶ？`;
+  btn.textContent='もういちど'; overlay.classList.remove('hide');
+  for(let i=0;i<5;i++) setTimeout(()=>burst(rand(W*0.2,W*0.8),H*0.4,[PAL.red,PAL.yellow,PAL.green,PAL.blue,COLOR][i],14),i*100);
+}
+
+function drawSky(){ const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#eaf6ff'); g.addColorStop(1,'#cfe9ff'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+
+let state='ready', last=0;
+function loop(ts){
+  requestAnimationFrame(loop);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  ctx.clearRect(0,0,W,H); drawSky();
+
+  if(state==='play'){ timeLeft-=dt; if(timeLeft<=0){ timeLeft=0; finish(); } }
+
+  // 盤面わく
+  ctx.fillStyle='#ffffff'; roundRect(board.x-6,board.y-6,board.w+12,board.h+12,14); ctx.fill();
+  ctx.strokeStyle='rgba(43,58,103,.25)'; ctx.lineWidth=2; roundRect(board.x-6,board.y-6,board.w+12,board.h+12,14); ctx.stroke();
+  // セル
+  for(let ri=0;ri<rows;ri++) for(let ci=0;ci<cols;ci++){
+    if(cells[ri*cols+ci]){ ctx.fillStyle=COLOR; ctx.fillRect(board.x+ci*cell, board.y+ri*cell, cell+0.5, cell+0.5); }
+  }
+  // うすいグリッド線
+  ctx.strokeStyle='rgba(43,58,103,.07)'; ctx.lineWidth=1;
+  for(let ci=0;ci<=cols;ci++){ ctx.beginPath(); ctx.moveTo(board.x+ci*cell,board.y); ctx.lineTo(board.x+ci*cell,board.y+board.h); ctx.stroke(); }
+  for(let ri=0;ri<=rows;ri++){ ctx.beginPath(); ctx.moveTo(board.x,board.y+ri*cell); ctx.lineTo(board.x+board.w,board.y+ri*cell); ctx.stroke(); }
+
+  updateParticles(dt); drawParticles();
+
+  const pct = cells? Math.floor(filledCount/(cols*rows)*100) : 0;
+  hud.textContent = state==='play' ? `⏰ ${Math.ceil(timeLeft)}  🎨 ${pct}%` : '';
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+resize(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>自由研究テーマ・ガチャ診断</title>
+<style>
+  :root { --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF; --ink:#2b3a67; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; background:#dff3ff; font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; color:var(--ink); }
+  #bg { position:fixed; inset:0; z-index:0; }
+  #app { position:relative; z-index:1; max-width:480px; margin:0 auto; min-height:100%;
+    padding:18px 16px calc(24px + env(safe-area-inset-bottom)); }
+  h1 { font-size:24px; text-align:center; text-shadow:0 2px 0 #fff; margin-bottom:4px; }
+  .lead { text-align:center; font-size:13px; opacity:.85; margin-bottom:14px; }
+  .group { background:rgba(255,255,255,.78); border-radius:16px; padding:12px; margin-bottom:12px;
+    box-shadow:0 4px 0 rgba(43,58,103,.10); }
+  .group h2 { font-size:15px; margin-bottom:8px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { font-size:14px; font-weight:700; padding:8px 12px; border-radius:999px; border:2px solid #cfe0f5;
+    background:#fff; color:var(--ink); cursor:pointer; }
+  .chip.sel { background:var(--pop-blue); color:#fff; border-color:var(--pop-blue); }
+  #rollBtn { display:block; width:100%; font-size:22px; font-weight:900; padding:16px; border:none;
+    border-radius:999px; background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800;
+    cursor:pointer; margin:4px 0 14px; }
+  #rollBtn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  #rollBtn:disabled { opacity:.5; box-shadow:0 6px 0 #b9c4d8; }
+  #result { background:#fff; border-radius:18px; padding:16px; box-shadow:0 6px 0 rgba(43,58,103,.14);
+    border:3px solid var(--pop-green); }
+  #result.hide { display:none; }
+  .rt { font-size:13px; color:var(--pop-green); font-weight:800; }
+  .rtitle { font-size:22px; font-weight:900; margin:4px 0 10px; line-height:1.35; }
+  .steps { font-size:15px; line-height:1.6; padding-left:1.2em; margin-bottom:10px; }
+  .sumlabel { font-size:13px; font-weight:800; color:var(--pop-blue); }
+  .sum { font-size:14px; line-height:1.6; margin-bottom:12px; }
+  .ractions { display:flex; gap:8px; flex-wrap:wrap; }
+  .mini { font-size:14px; font-weight:800; padding:10px 14px; border:none; border-radius:12px; cursor:pointer; }
+  .mini.save { background:var(--pop-green); color:#fff; box-shadow:0 4px 0 #3a8a47; }
+  .mini.again { background:#fff; color:var(--ink); border:2px solid #cfe0f5; }
+  .mini:active { transform:translateY(3px); }
+  .cta { margin-top:14px; background:#fff7d6; border:2px dashed #e0b400; border-radius:14px; padding:12px; font-size:13px; line-height:1.6; }
+  .cta a { color:#b07b00; font-weight:800; }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div id="app">
+  <h1>🎰 自由研究テーマ・ガチャ</h1>
+  <div class="lead">学年・きょうみ・かけられる日数をえらんで、ガチャを回そう！</div>
+
+  <div class="group"><h2>① 学年</h2><div class="chips" id="gGrade"></div></div>
+  <div class="group"><h2>② なにに きょうみある？</h2><div class="chips" id="gInterest"></div></div>
+  <div class="group"><h2>③ どのくらい かけられる？</h2><div class="chips" id="gTime"></div></div>
+
+  <button id="rollBtn" disabled>きょうみを えらんでね</button>
+
+  <div id="result" class="hide">
+    <div class="rt">きみの自由研究テーマ</div>
+    <div class="rtitle" id="rTitle"></div>
+    <ol class="steps" id="rSteps"></ol>
+    <div class="sumlabel">▼ まとめかたの型</div>
+    <div class="sum" id="rSum"></div>
+    <div class="ractions">
+      <button class="mini save" id="saveBtn">⭐ これにする（保存）</button>
+      <button class="mini again" id="againBtn">🔁 もう一回</button>
+    </div>
+    <div class="cta">
+      もっとテーマがほしい・進め方を教えてほしいときは<br>
+      <a href="#" id="ctaLink">▶ 夏の「自由研究おたすけ教室」／LINEで追加テーマ配布</a>
+      <div style="font-size:11px;opacity:.7;margin-top:4px">※リンク先は当日の公式LINE/案内URLに差し替え</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// すべてインライン・自己完結（外部 fetch / CDN / import なし）。入力データは保存しない（PIIなし）。
+const cv=document.getElementById('bg'), ctx=cv.getContext('2d');
+let W,H,dpr;
+function resize(){ dpr=window.devicePixelRatio||1; W=window.innerWidth; H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px'; cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0); }
+window.addEventListener('resize',resize); resize();
+const rand=(a,b)=>a+Math.random()*(b-a);
+let particles=[];
+function burst(x,y,color,n=16){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(60,220);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-60,life:rand(.6,1.1),t:0,c:color,r:rand(3,6)}); } }
+function loop(ts){ requestAnimationFrame(loop);
+  const dt=loop.l?Math.min((ts-loop.l)/1000,0.05):0; loop.l=ts;
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#aee2ff'); g.addColorStop(1,'#eafff0');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  for(const p of particles){ p.t+=dt; p.vy+=520*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life);
+  for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life); ctx.fillStyle=p.c;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1;
+}
+requestAnimationFrame(loop);
+
+// ===== テーマDB（すべて内蔵・外部参照なし）=====
+// time: short=1日 / mid=2〜3日 / long=1週間
+const DB=[
+ {i:'いきもの',t:'short',title:'ダンゴムシは どっちに まがる？',steps:['ダンゴムシを 1ぴき 用意する','右・左に かべを置いて 何回まがるか 記録','10回ためして 表にする'],sum:'「右○回・左○回」を 表とグラフ、絵もそえてまとめる'},
+ {i:'いきもの',t:'mid',title:'アリは あまい・しょっぱい どっちが すき？',steps:['さとう水・しお水・水を 紙にたらす','アリが どれに集まるか 観察','時間ごとに 集まった数を記録'],sum:'「いちばん人気は○○」を ぼうグラフでまとめる'},
+ {i:'いきもの',t:'long',title:'メダカ／カタツムリの 1週間 観察日記',steps:['毎日 同じ時間に ようすを見る','食べた量・うごき・天気を記録','1週間の へんかを ふりかえる'],sum:'日づけごとの カードを ならべて 気づきを書く'},
+ {i:'しょくぶつ',t:'mid',title:'植物は どんな水が すき？（水・お茶・ジュース）',steps:['同じ植物を 3つ用意','ちがう液体で 育てる','3日間 せたけ・元気さを記録'],sum:'「いちばん育ったのは○○」を 写真と表でまとめる'},
+ {i:'しょくぶつ',t:'long',title:'まめの たねは 何日で めを出す？',steps:['まめを ぬれたティッシュに置く','毎日 ようすを写真・絵で記録','めが出た日・のびた長さを記録'],sum:'せいちょうの ようすを 折れ線グラフに'},
+ {i:'みず',t:'short',title:'こおりは どうすれば 早くとける？',steps:['同じ氷を 3つ用意','室内・日なた・しおをかける で比べる','とけた時間を ストップウォッチで計る'],sum:'「いちばん早いのは○○」を 表でまとめる'},
+ {i:'みず',t:'short',title:'うくもの・しずむもの しらべ',steps:['家にあるもの 10個 用意','水に入れて うく/しずむ を記録','なぜそうなるか 予想する'],sum:'「うく組・しずむ組」に分けて 絵でまとめる'},
+ {i:'みず',t:'mid',title:'塩を どれだけ入れたら 卵がうく？',steps:['コップの水に 塩を少しずつ入れる','卵がういた時の 塩の量を記録','量をかえて 何回かためす'],sum:'「○ぱいで ういた」を 表と図でまとめる'},
+ {i:'てんき',t:'long',title:'1週間の 天気と気温 しらべ',steps:['毎日 同じ時間に 気温をはかる','天気マーク・気温を記録','1週間の へんかを見る'],sum:'気温は 折れ線、天気は マークでカレンダーに'},
+ {i:'てんき',t:'short',title:'にじを 自分で つくろう',steps:['きりふき／ホースで 水をまく','太陽を背にして にじを さがす','どの角度で見えるか 記録'],sum:'にじの でき方を 図と絵で せつめい'},
+ {i:'うちゅう',t:'mid',title:'月の かたちは 何日で かわる？',steps:['毎ばん 月を見て 形を絵にかく','時間と方角も 記録','3日〜1週間 つづける'],sum:'月の形カードを ならべて へんかをまとめる'},
+ {i:'うちゅう',t:'short',title:'影は 1日で どう動く？',steps:['ぼうを 立てて 影をしるしする','1時間ごとに 影の先を記録','形・長さの へんかを見る'],sum:'地面の しるしを 写して 図にまとめる'},
+ {i:'たべもの',t:'short',title:'10円玉を ピカピカにするのは どれ？',steps:['よごれた10円玉を 用意','しょうゆ・ソース・レモン等につける','どれが きれいになるか 記録'],sum:'「いちばんピカピカは○○」を 写真でくらべる'},
+ {i:'たべもの',t:'mid',title:'りんごは どうすれば 茶色くならない？',steps:['切ったりんごを いくつか用意','水・塩水・レモン水につける','時間ごとの 色を記録'],sum:'色のへんかを 写真と表でまとめる'},
+ {i:'からだ',t:'short',title:'目を つぶると まっすぐ歩ける？',steps:['スタートと ゴールを決める','目をつぶって 歩いてみる','どれだけ ずれたか 記録'],sum:'何回かためして ずれを 図にまとめる'},
+ {i:'からだ',t:'mid',title:'きき手・きき足 しらべ（家族でくらべる）',steps:['ボールをける・字を書く等のテスト','家族みんなで やってみる','右・左を 記録'],sum:'家族の けっかを 表にして きづきを書く'},
+ {i:'きかい・でんき',t:'mid',title:'かんでんち1個で 豆電球は どこまで光る？',steps:['電池・豆電球・どう線を つなぐ','つなぎ方を かえてみる','明るさの ちがいを記録'],sum:'つなぎ方の図と 明るさを まとめる'},
+ {i:'きかい・でんき',t:'short',title:'しずかに たおれない ドミノの ならべ方',steps:['ドミノ（本やつみき）を ならべる','間かくを かえて たおす','うまくいく 間かくを記録'],sum:'せいこうした ならべ方を 図でまとめる'},
+ {i:'じしゃく',t:'short',title:'じしゃくに つくもの しらべ',steps:['家にあるもの 15個 用意','じしゃくに つく/つかない を試す','なかま分けする'],sum:'「つく組・つかない組」を 表でまとめ 理由を予想'},
+ {i:'じしゃく',t:'mid',title:'じしゃくの力は 紙なん枚まで とどく？',steps:['クリップの上に 紙をかさねる','じしゃくで 持ち上がるか試す','何枚までOKか 記録'],sum:'「○枚までとどいた」を 図と表でまとめる'},
+ {i:'ひかり・かげ',t:'short',title:'かげで 大きさは かわる？',steps:['ライトと もの の きょりをかえる','かげの 大きさを はかる','きょりと大きさを 記録'],sum:'「近いほど○○」を 図とグラフでまとめる'},
+ {i:'おと',t:'short',title:'コップの水の 量で 音はかわる？',steps:['同じコップに ちがう量の水','スプーンで たたいて 音をきく','高い/ひくいを 記録'],sum:'水の量と 音の高さを 表でまとめる'},
+ {i:'りょうり',t:'mid',title:'さいきょうの シャボン玉液を つくろう',steps:['せんざい・さとう・水の 量をかえる','どれが 一番われにくいか 試す','われるまでの 時間を記録'],sum:'レシピごとの けっかを 表でくらべる'},
+ {i:'こうさく',t:'long',title:'ペットボトルで 水の ろ過そうち',steps:['すな・小石・ガーゼで そうちを作る','よごれた水を ろ過してみる','どれだけ きれいになるか観察'],sum:'作り方の図と ろ過の前後を 写真でまとめる'},
+];
+const INTERESTS=[...new Set(DB.map(d=>d.i))];
+const GRADES=['1年','2年','3年','4年','5年','6年'];
+const TIMES=[['short','1日でできる'],['mid','2〜3日'],['long','1週間']];
+
+let selG=null, selI=null, selT=null;
+function chipGroup(el, items, onSel, getLabel){
+  items.forEach(it=>{ const c=document.createElement('button'); c.className='chip';
+    c.textContent=getLabel(it); c.onclick=()=>{ [...el.children].forEach(x=>x.classList.remove('sel'));
+      c.classList.add('sel'); onSel(it); updateBtn(); }; el.appendChild(c); });
+}
+chipGroup(document.getElementById('gGrade'), GRADES, v=>selG=v, v=>v);
+chipGroup(document.getElementById('gInterest'), INTERESTS, v=>selI=v, v=>v);
+chipGroup(document.getElementById('gTime'), TIMES, v=>selT=v[0], v=>v[1]);
+
+const rollBtn=document.getElementById('rollBtn');
+function updateBtn(){ if(selI){ rollBtn.disabled=false; rollBtn.textContent='🎰 ガチャを回す'; }
+  else { rollBtn.disabled=true; rollBtn.textContent='きょうみを えらんでね'; } }
+
+function pickTheme(){
+  let pool=DB.filter(d=>d.i===selI && (!selT || d.t===selT));
+  if(!pool.length) pool=DB.filter(d=>d.i===selI);     // 近条件フォールバック
+  if(!pool.length) pool=DB;
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+
+const resultEl=document.getElementById('result');
+let spinning=false, current=null;
+function showResult(th){
+  current=th;
+  document.getElementById('rTitle').textContent=th.title;
+  const ol=document.getElementById('rSteps'); ol.innerHTML='';
+  th.steps.forEach(s=>{ const li=document.createElement('li'); li.textContent=s; ol.appendChild(li); });
+  document.getElementById('rSum').textContent=th.sum + (selG?`（${selG}むけに むずかしさを調整しよう）`:'');
+  resultEl.classList.remove('hide');
+  resultEl.scrollIntoView({behavior:'smooth', block:'center'});
+  const r=resultEl.getBoundingClientRect();
+  burst(r.left+r.width/2, r.top+30, '#FFD93D', 20);
+  burst(r.left+r.width/2, r.top+30, '#6BCB77', 16);
+}
+rollBtn.addEventListener('click', ()=>{
+  if(spinning || !selI) return; spinning=true; rollBtn.disabled=true;
+  let n=0; const timer=setInterval(()=>{
+    document.getElementById('rTitle').textContent=pickTheme().title; resultEl.classList.remove('hide');
+    if(++n>12){ clearInterval(timer); spinning=false; rollBtn.disabled=false; showResult(pickTheme()); }
+  }, 70);
+});
+document.getElementById('againBtn').addEventListener('click', ()=>{ if(selI) rollBtn.click(); });
+document.getElementById('saveBtn').addEventListener('click', ()=>{
+  try{ const k='jiyukenkyu_saved'; const arr=JSON.parse(localStorage.getItem(k)||'[]');
+    arr.push({title:current.title, grade:selG||'', when:''}); localStorage.setItem(k, JSON.stringify(arr));
+    const b=document.getElementById('saveBtn'); b.textContent='✅ 保存したよ'; setTimeout(()=>b.textContent='⭐ これにする（保存）',1500);
+  }catch(e){}
+});
+document.getElementById('ctaLink').addEventListener('click', e=>e.preventDefault());
+</script>
+</body>
+</html>

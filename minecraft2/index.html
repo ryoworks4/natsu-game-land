@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>マイクラふう 2D ほって つくろう</title>
+<style>
+  :root { --pop-yellow:#FFD93D; --ink:#2b3a67; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
+  html, body { height:100%; overflow:hidden; background:#0b1026;
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+
+  #topbar { position:absolute; top:max(10px,env(safe-area-inset-top)); left:0; right:0; z-index:5;
+    display:flex; align-items:center; justify-content:center; gap:8px; padding:0 10px; pointer-events:none; }
+  .tb { pointer-events:auto; font-size:16px; font-weight:800; padding:9px 14px; border:none; border-radius:12px;
+    color:#fff; box-shadow:0 4px 0 rgba(0,0,0,.22); }
+  .tb:active { transform:translateY(3px); box-shadow:0 1px 0 rgba(0,0,0,.22); }
+  #modeBtn.dig   { background:#e07b39; box-shadow:0 4px 0 #a85420; }
+  #modeBtn.place { background:#3aa657; box-shadow:0 4px 0 #277a3e; }
+  #resetBtn { background:#fff; color:var(--ink); box-shadow:0 4px 0 #b9c4d8; }
+
+  #quest { position:absolute; top:calc(max(10px,env(safe-area-inset-top)) + 48px); left:0; right:0; z-index:4;
+    text-align:center; color:#fff; font-weight:800; font-size:16px; pointer-events:none;
+    text-shadow:0 2px 4px rgba(0,0,0,.45); }
+
+  #palette { position:absolute; bottom:0; left:0; right:0; z-index:5;
+    display:flex; justify-content:center; align-items:flex-end; flex-wrap:wrap; gap:6px; min-height:62px;
+    padding:8px 6px calc(8px + env(safe-area-inset-bottom)); background:rgba(20,28,46,.55); }
+  .slot { position:relative; width:46px; height:46px; border-radius:10px; border:3px solid transparent;
+    box-shadow:inset 0 -6px 0 rgba(0,0,0,.22); }
+  .slot.sel { border-color:var(--pop-yellow); transform:translateY(-4px); }
+  .slot .cnt { position:absolute; right:-3px; bottom:-3px; min-width:18px; height:18px; line-height:18px;
+    padding:0 3px; border-radius:9px; background:var(--ink); color:#fff; font-size:12px; font-weight:900; text-align:center; }
+  #emptyHint { color:#cfe0ff; font-size:14px; font-weight:700; align-self:center; }
+
+  #overlay { position:absolute; inset:0; z-index:10; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:16px; background:rgba(11,16,38,.74); color:#fff; text-align:center; padding:24px; }
+  #overlay h1 { font-size:28px; }
+  #overlay p { font-size:16px; line-height:1.7; opacity:.95; }
+  #startBtn { font-size:22px; font-weight:900; padding:14px 34px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; }
+  #startBtn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+
+<div id="topbar">
+  <button id="modeBtn" class="tb dig">⛏️ ほる</button>
+  <button id="resetBtn" class="tb">🌍 さいしょから</button>
+</div>
+<div id="quest"></div>
+<div id="palette"></div>
+
+<div id="overlay">
+  <h1>⛏️ ほって つくろう</h1>
+  <p>タップで ブロックを ほる！<br>
+  ふかく ほると ダイヤが でるよ💎<br>
+  「おく」で あつめた ブロックを つみあげよう。<br>
+  たてに スワイプで したまで みれる。</p>
+  <button id="startBtn">スタート</button>
+</div>
+
+<script>
+// すべてインライン・自己完結（外部 fetch / CDN / import / 画像URL なし）。
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const overlay=document.getElementById('overlay'), startBtn=document.getElementById('startBtn');
+const modeBtn=document.getElementById('modeBtn'), resetBtn=document.getElementById('resetBtn');
+const palette=document.getElementById('palette'), questEl=document.getElementById('quest');
+
+// ===== ブロック定義 =====
+// id: 種類 / name: 表示 / col: 基本色 / spec: 鉱石のつぶ色(あれば) / hard:掘れるか / place:置けるか
+const AIR=0;
+const BLOCKS={
+  1:{name:'くさ',   col:'#6BCB77', top:'#7ad98a', place:true},
+  2:{name:'つち',   col:'#9a6b3f', place:true},
+  3:{name:'いし',   col:'#8b929e', place:true},
+  4:{name:'き',     col:'#a9763f', grain:true, place:true},
+  5:{name:'はっぱ', col:'#57b85a', place:true},
+  6:{name:'せきたん',col:'#7b818c', spec:'#2b2f36', place:true},
+  7:{name:'てつ',   col:'#8b929e', spec:'#d8a070', place:true},
+  8:{name:'きん',   col:'#8b929e', spec:'#ffd33d', place:true},
+  9:{name:'ダイヤ', col:'#8b929e', spec:'#5ff0e6', place:true},
+  10:{name:'いわ',  col:'#4a4f59', place:false}, // 岩盤＝掘れない
+};
+const PLACEABLE=Object.keys(BLOCKS).map(Number).filter(id=>BLOCKS[id].place);
+
+// ===== ワールド =====
+const COLS=12, ROWS=40, GOAL=3;
+let world, surface, inv, selected, mode, diamonds, won;
+
+// 安定した擬似乱数（タイル位置から決まる＝つぶ模様がチラつかない）
+function hash(x,y){ let h=(x*73856093)^(y*19349663); h=(h^(h>>>13))*1274126177; return ((h>>>0)%1000)/1000; }
+
+function genWorld(){
+  world=new Array(COLS*ROWS).fill(AIR);
+  surface=new Array(COLS).fill(0);
+  // 地表の高さ（ゆるい起伏）
+  const base=6;
+  for(let x=0;x<COLS;x++){
+    const h=base + Math.round(Math.sin(x*0.7)*1.4 + (Math.random()*2-1));
+    surface[x]=h;
+    for(let y=0;y<ROWS;y++){
+      if(y===ROWS-1){ set(x,y,10); continue; }      // 一番下は岩盤
+      if(y<h) continue;                              // 空
+      if(y===h){ set(x,y,1); continue; }             // 地表＝くさ
+      if(y<h+4){ set(x,y,2); continue; }             // つち
+      // いし帯：深いほど良い鉱石が出る
+      let t=3;
+      const r=Math.random();
+      if(y>h+5  && r<0.10) t=6;                       // せきたん
+      if(y>h+9  && r<0.07) t=7;                       // てつ
+      if(y>h+14 && r<0.045) t=8;                      // きん
+      if(y>h+20 && r<0.035) t=9;                      // ダイヤ
+      set(x,y,t);
+    }
+  }
+  // き（木）を数本生やす
+  for(let x=1;x<COLS-1;x++){
+    if(Math.random()<0.28){
+      const h=surface[x], th=2+Math.floor(Math.random()*2);
+      for(let i=1;i<=th;i++) set(x,h-i,4);
+      const top=h-th-1;
+      for(let dx=-1;dx<=1;dx++){ set(x+dx,top,5); }
+      set(x,top-1,5);
+    }
+  }
+}
+function idx(x,y){ return y*COLS+x; }
+function get(x,y){ if(x<0||x>=COLS||y<0||y>=ROWS) return AIR; return world[idx(x,y)]; }
+function set(x,y,t){ if(x<0||x>=COLS||y<0||y>=ROWS) return; world[idx(x,y)]=t; }
+
+function reset(){
+  genWorld();
+  inv={}; selected=null; mode='dig'; diamonds=0; won=false;
+  camY=0; setMode('dig'); buildPalette(); updateQuest();
+}
+
+// ===== 表示・カメラ =====
+let W,H,dpr,TILE,worldH,camY=0;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  TILE=Math.floor(W/COLS);
+  worldH=ROWS*TILE;
+  clampCam();
+}
+function clampCam(){ const max=Math.max(0,worldH-H); camY=Math.min(Math.max(camY,0),max); }
+window.addEventListener('resize',resize);
+
+const OFFX=()=>Math.floor((W-COLS*TILE)/2);
+
+// ===== パーティクル =====
+let particles=[];
+function burst(px,py,color,n=8){ for(let i=0;i<n;i++){ const a=Math.random()*7,s=40+Math.random()*120;
+  particles.push({x:px,y:py,vx:Math.cos(a)*s,vy:Math.sin(a)*s-50,t:0,life:.3+Math.random()*.4,c:color,r:2+Math.random()*2.5}); } }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=620*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life); }
+
+// ===== 描画 =====
+function drawTile(x,y,t){
+  const sx=OFFX()+x*TILE, sy=y*TILE-camY;
+  if(sy>H||sy+TILE<0) return;
+  const b=BLOCKS[t];
+  ctx.fillStyle=b.col; ctx.fillRect(sx,sy,TILE,TILE);
+  if(b.top){ ctx.fillStyle=b.top; ctx.fillRect(sx,sy,TILE,Math.max(3,TILE*0.22)); } // くさの上面
+  if(b.grain){ ctx.fillStyle='rgba(0,0,0,.14)'; for(let i=1;i<3;i++) ctx.fillRect(sx,sy+i*TILE/3,TILE,2); } // 木目
+  if(b.spec){ // 鉱石のつぶ（位置安定）
+    ctx.fillStyle=b.spec;
+    for(let i=0;i<4;i++){ const hx=hash(x*4+i,y), hy=hash(x,y*4+i);
+      const rr=TILE*0.12; ctx.beginPath(); ctx.arc(sx+TILE*(0.2+hx*0.6), sy+TILE*(0.2+hy*0.6), rr,0,7); ctx.fill(); }
+  }
+  // 立体感：右下に影
+  ctx.fillStyle='rgba(0,0,0,.16)'; ctx.fillRect(sx,sy+TILE-3,TILE,3); ctx.fillRect(sx+TILE-3,sy,3,TILE);
+  ctx.strokeStyle='rgba(0,0,0,.10)'; ctx.lineWidth=1; ctx.strokeRect(sx+.5,sy+.5,TILE-1,TILE-1);
+}
+
+function draw(){
+  // 空（上）→ 洞窟（下）のグラデ背景
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#8fd3ff'); g.addColorStop(.4,'#bfe8ff'); g.addColorStop(1,'#cfeeff');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  // 地中の空タイル＝暗い洞窟色で塗る
+  const ox=OFFX();
+  for(let x=0;x<COLS;x++) for(let y=0;y<ROWS;y++){
+    if(get(x,y)===AIR && y>surface[x]){
+      const sy=y*TILE-camY; if(sy>H||sy+TILE<0) continue;
+      ctx.fillStyle='#2a2333'; ctx.fillRect(ox+x*TILE,sy,TILE,TILE);
+    }
+  }
+  // 太陽
+  const sunY=40-camY*0.3; ctx.fillStyle='#ffe66d'; ctx.beginPath(); ctx.arc(W-46,sunY,20,0,7); ctx.fill();
+  // ブロック
+  for(let y=0;y<ROWS;y++) for(let x=0;x<COLS;x++){ const t=get(x,y); if(t!==AIR) drawTile(x,y,t); }
+  // パーティクル
+  for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life); ctx.fillStyle=p.c;
+    ctx.beginPath(); ctx.arc(p.x,p.y-camY,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1;
+}
+
+// ===== 入力（タップ＝掘る/置く、スワイプ＝スクロール）=====
+let down=null;
+cv.addEventListener('pointerdown', e=>{ e.preventDefault(); if(state!=='play') return;
+  down={x:e.clientX,y:e.clientY,cam:camY,moved:false}; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e=>{ if(!down) return;
+  const dy=e.clientY-down.y;
+  if(Math.abs(dy)>6||Math.abs(e.clientX-down.x)>6) down.moved=true;
+  camY=down.cam-dy; clampCam(); });
+cv.addEventListener('pointerup', e=>{ if(!down) return;
+  if(!down.moved) tap(e.clientX,e.clientY); down=null; });
+cv.addEventListener('pointercancel', ()=>{ down=null; });
+
+function tap(clientX,clientY){
+  const r=cv.getBoundingClientRect();
+  const px=clientX-r.left-OFFX(), py=clientY-r.top+camY;
+  const x=Math.floor(px/TILE), y=Math.floor(py/TILE);
+  if(x<0||x>=COLS||y<0||y>=ROWS) return;
+  const cx=OFFX()+x*TILE+TILE/2, cy=y*TILE+TILE/2;
+  const t=get(x,y);
+  if(mode==='dig'){
+    if(t===AIR||t===10) return;            // 空・岩盤は掘れない
+    set(x,y,AIR); inv[t]=(inv[t]||0)+1;
+    if(t===9){ diamonds++; updateQuest(); checkWin(); }
+    burst(cx,cy,BLOCKS[t].col,9); buildPalette();
+  } else {
+    if(t!==AIR) return;                     // すでにブロックがある
+    if(selected==null||!(inv[selected]>0)) return;
+    set(x,y,selected); inv[selected]--; if(inv[selected]<=0) delete inv[selected];
+    burst(cx,cy,BLOCKS[selected].col,6);
+    if(!(inv[selected]>0)) selected=PLACEABLE.find(id=>inv[id]>0) ?? null;
+    buildPalette();
+  }
+}
+
+// ===== UI =====
+function setMode(m){ mode=m;
+  if(m==='dig'){ modeBtn.textContent='⛏️ ほる'; modeBtn.className='tb dig'; }
+  else { modeBtn.textContent='🧱 おく'; modeBtn.className='tb place'; }
+}
+modeBtn.addEventListener('click', ()=>{
+  if(mode==='dig'){ // 置くに切替＝持ち物があるときだけ
+    selected=selected!=null&&inv[selected]>0 ? selected : (PLACEABLE.find(id=>inv[id]>0) ?? null);
+    setMode(selected!=null?'place':'dig');
+  } else setMode('dig');
+  buildPalette();
+});
+resetBtn.addEventListener('click', ()=>reset());
+
+function buildPalette(){
+  palette.innerHTML='';
+  const have=PLACEABLE.filter(id=>inv[id]>0);
+  if(have.length===0){ const h=document.createElement('div'); h.id='emptyHint';
+    h.textContent='ブロックを ほると ここに たまる'; palette.appendChild(h); return; }
+  have.forEach(id=>{
+    const b=BLOCKS[id], el=document.createElement('div');
+    el.className='slot'+(id===selected?' sel':''); el.style.background=b.col;
+    const c=document.createElement('div'); c.className='cnt'; c.textContent=inv[id]; el.appendChild(c);
+    el.addEventListener('pointerdown', e=>{ e.preventDefault(); selected=id; setMode('place');
+      [...palette.children].forEach(s=>s.classList.remove('sel')); el.classList.add('sel'); });
+    palette.appendChild(el);
+  });
+}
+
+function updateQuest(){
+  if(won){ questEl.textContent='🎉 クリア！「さいしょから」で もういちど'; return; }
+  questEl.textContent='💎 ダイヤを '+GOAL+'こ あつめよう（'+diamonds+'/'+GOAL+'）';
+}
+function checkWin(){
+  if(diamonds>=GOAL && !won){ won=true; updateQuest();
+    for(let i=0;i<40;i++) burst(W/2,H*0.4,['#5ff0e6','#ffd33d','#ff6b6b','#6BCB77'][i%4],1); }
+}
+
+function start(){ overlay.classList.add('hide'); state='play'; }
+startBtn.addEventListener('click', start);
+window.addEventListener('keydown', e=>{ if(e.code==='Space'){ e.preventDefault(); if(state!=='play') start(); } });
+
+// ===== ループ =====
+let state='ready', last=0;
+function loop(ts){ requestAnimationFrame(loop);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  updateParticles(dt); draw();
+}
+resize(); reset(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>にゃんこ城バトル</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+  html, body { height: 100%; overflow: hidden; background: #0b1026;
+    font-family: -apple-system, "Hiragino Maru Gothic ProN", sans-serif; }
+  #wrap { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; }
+  canvas { display: block; background: #bfe9ff; touch-action: none; flex: 0 0 auto; }
+  /* 出撃ボタン列 */
+  #pad { width: 100%; max-width: 480px; display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 6px; padding: 8px; background: #16204a; }
+  .u { border: none; border-radius: 12px; padding: 8px 2px; color: #fff; font-weight: 800;
+    background: #2b3a67; box-shadow: 0 4px 0 #101733; cursor: pointer; line-height: 1.2; }
+  .u:active { transform: translateY(3px); box-shadow: 0 1px 0 #101733; }
+  .u:disabled { opacity: .4; }
+  .u .e { font-size: 22px; display: block; }
+  .u .n { font-size: 12px; }
+  .u .c { font-size: 12px; color: #ffd23f; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px;
+    background: rgba(11,16,38,.72); color: #fff; text-align: center; padding: 24px; }
+  #overlay h1 { font-size: 30px; }
+  #overlay p { font-size: 15px; line-height: 1.7; opacity: .95; }
+  #btn { font-size: 22px; font-weight: 800; padding: 14px 34px; border: none;
+    border-radius: 999px; background: #ffd23f; color: #2b3a67; box-shadow: 0 6px 0 #d9a800; cursor: pointer; }
+  #btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #d9a800; }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="pad">
+    <button class="u" data-k="0"><span class="e">🐱</span><span class="n">ねこ</span><span class="c">25</span></button>
+    <button class="u" data-k="1"><span class="e">🐯</span><span class="n">とら</span><span class="c">45</span></button>
+    <button class="u" data-k="2"><span class="e">🦁</span><span class="n">かべ</span><span class="c">60</span></button>
+    <button class="u" data-k="3"><span class="e">💰</span><span class="n">サイフ</span><span class="c" id="wc">80</span></button>
+  </div>
+</div>
+<div id="overlay">
+  <h1>🐱 にゃんこ城バトル</h1>
+  <p>下のボタンで なかまを しゅつげき！<br>おかねを ためて 敵のお城をこわそう。<br>💰サイフを つよくすると おかねが はやくたまる。</p>
+  <button id="btn">スタート</button>
+</div>
+
+<script>
+// すべてインライン。外部 fetch / CDN / import は禁止（自己完結契約）。
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const overlay = document.getElementById('overlay');
+const title = overlay.querySelector('h1');
+const desc = overlay.querySelector('p');
+const btn = document.getElementById('btn');
+const pad = document.getElementById('pad');
+const wc = document.getElementById('wc');
+
+let W, H;
+const rand = (a,b) => a + Math.random()*(b-a);
+let particles = [];
+function burst(x, y, color, n=12){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2), s=rand(40,160);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-50,life:rand(.4,.7),t:0,c:color,r:rand(2,5)}); } }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=560*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles = particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1; }
+let shakeT=0, shakeMag=0; function shake(mag=5,dur=0.22){ shakeMag=mag; shakeT=dur; }
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;          // Retina でぼやけない
+  const padH = (pad && pad.offsetHeight) || 64;
+  W = Math.min(window.innerWidth, 480);
+  H = window.innerHeight - padH;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize', resize);
+
+// ---- ステータス定義 ----
+// 味方ユニット（ボタンと対応）
+const ALLY = [
+  { e:'🐱', cost:25, hp:42,  atk:8,  spd:0.55, rng:20, cd:32 },
+  { e:'🐯', cost:45, hp:34,  atk:20, spd:0.85, rng:18, cd:26 },
+  { e:'🦁', cost:60, hp:200, atk:6,  spd:0.35, rng:20, cd:44 },
+];
+// 敵ユニット
+const FOE = {
+  dog:  { e:'🐶', hp:54,  atk:8,  spd:0.5,  rng:20, cd:32 },
+  boar: { e:'🐗', hp:150, atk:13, spd:0.3,  rng:20, cd:48 },
+  boss: { e:'👹', hp:900, atk:45, spd:0.22, rng:24, cd:60 },
+};
+const BASE_HP = 1200;
+
+let state = 'ready';
+let units, money, walletLv, baseP, baseE, frame, foeTimer, bossSpawned, foeBudget;
+
+const groundY = () => H - 46;
+const baseEX = () => W - 30;
+const basePX = () => 30;
+
+function reset() {
+  units = [];
+  money = 90;
+  walletLv = 0;
+  baseP = BASE_HP; baseE = BASE_HP;
+  frame = 0; foeTimer = 90; bossSpawned = false; foeBudget = 0;
+}
+
+function walletCost() { return 80 + walletLv * 70; }
+function moneyMax()    { return 200 + walletLv * 90; }
+function moneyRate()   { return 0.28 + walletLv * 0.14; }
+
+function start() {
+  resize();
+  reset();
+  state = 'play';
+  overlay.classList.add('hide');
+}
+btn.addEventListener('click', start);
+
+// ---- 出撃ボタン ----
+pad.addEventListener('pointerdown', e => {
+  const b = e.target.closest('.u');
+  if (!b || state !== 'play') return;
+  e.preventDefault();
+  const k = +b.dataset.k;
+  if (k === 3) { // サイフ強化
+    if (money >= walletCost()) { money -= walletCost(); walletLv++; }
+    return;
+  }
+  const t = ALLY[k];
+  if (money >= t.cost) {
+    money -= t.cost;
+    units.push(mk(t, 1, basePX() + 16));
+  }
+});
+
+function mk(t, side, x) {
+  return { e:t.e, hp:t.hp, max:t.hp, atk:t.atk, spd:t.spd, rng:t.rng, cd:t.cd, t:0, side, x };
+}
+
+function spawnFoe() {
+  // 時間がたつほど強い敵が増える
+  const r = Math.random();
+  const type = foeBudget > 40 && r < 0.45 ? FOE.boar : FOE.dog;
+  units.push(mk(type, -1, baseEX() - 16));
+}
+
+// ---- 更新 ----
+function update() {
+  frame++;
+  // おかね回復
+  money = Math.min(moneyMax(), money + moneyRate());
+
+  // 敵の出撃（だんだん速く・強く）
+  foeBudget = frame / 60;
+  foeTimer--;
+  if (foeTimer <= 0) {
+    spawnFoe();
+    foeTimer = Math.max(40, 150 - foeBudget * 2.5);
+  }
+  // ボス（だいたい90秒で登場）
+  if (!bossSpawned && frame > 60 * 90) {
+    bossSpawned = true;
+    units.push(mk(FOE.boss, -1, baseEX() - 18));
+  }
+
+  // 各ユニット行動
+  for (const u of units) {
+    if (u.hp <= 0) continue;
+    u.t = Math.max(0, u.t - 1);
+    // 射程内の敵をさがす
+    let target = null, best = 1e9;
+    for (const o of units) {
+      if (o.hp <= 0 || o.side === u.side) continue;
+      const d = Math.abs(o.x - u.x);
+      if (d <= u.rng && d < best) { best = d; target = o; }
+    }
+    // 敵のお城も射程に
+    const enemyBaseX = u.side === 1 ? baseEX() : basePX();
+    const baseInRange = Math.abs(enemyBaseX - u.x) <= u.rng;
+
+    if (target) {
+      if (u.t === 0) { target.hp -= u.atk; u.t = u.cd;
+        if (target.hp <= 0) burst(target.x, groundY() - 14, u.side === 1 ? '#f55' : '#49f', 14); }  // 撃破
+    } else if (baseInRange) {
+      if (u.t === 0) {
+        if (u.side === 1) baseE -= u.atk; else baseP -= u.atk;
+        u.t = u.cd; shake(4, .12); burst(enemyBaseX, groundY() - 18, '#ffd23f', 8);                  // 城ダメージ
+      }
+    } else {
+      u.x += u.spd * u.side; // 前進
+    }
+  }
+  units = units.filter(u => u.hp > 0);
+
+  // 勝敗
+  if (baseE <= 0) end(true);
+  else if (baseP <= 0) end(false);
+}
+
+// ---- 描画 ----
+function drawBase(x, hp, label) {
+  const gy = groundY();
+  ctx.font = '34px serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('🏯', x, gy - 6);
+  // HPバー
+  const w = 54, hh = 6;
+  ctx.fillStyle = '#0008';
+  ctx.fillRect(x - w/2, gy + 4, w, hh);
+  ctx.fillStyle = hp > BASE_HP*0.3 ? '#5dd' : '#f66';
+  ctx.fillRect(x - w/2, gy + 4, w * Math.max(0, hp)/BASE_HP, hh);
+}
+
+function draw() {
+  ctx.save();
+  if (shakeT > 0) { shakeT -= 1/60; const m = shakeMag; ctx.translate(rand(-m,m), rand(-m,m)); }
+  // 空（グラデ）と地面
+  const sky = ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,'#aee2ff'); sky.addColorStop(1,'#dff3ff');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  const gy = groundY();
+  ctx.fillStyle = '#8fd36b'; ctx.fillRect(0, gy + 14, W, H - gy);
+  ctx.fillStyle = '#7ac457'; ctx.fillRect(0, gy + 14, W, 4);
+
+  drawBase(basePX(), baseP, 'みかた');
+  drawBase(baseEX(), baseE, 'てき');
+
+  // ユニット（前にいる順でなんとなく重なり）
+  const sorted = units.slice().sort((a, b) => a.x - b.x);
+  for (const u of sorted) {
+    ctx.save();
+    ctx.translate(u.x, gy - 4);
+    if (u.side === -1) ctx.scale(-1, 1); // 敵は左向き
+    ctx.font = '26px serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(u.e, 0, 0);
+    ctx.restore();
+    // HPバー
+    const w = 24, ratio = u.hp / u.max;
+    ctx.fillStyle = '#0006';
+    ctx.fillRect(u.x - w/2, gy - 34, w, 4);
+    ctx.fillStyle = u.side === 1 ? '#39f' : '#f44';
+    ctx.fillRect(u.x - w/2, gy - 34, w * ratio, 4);
+  }
+
+  drawParticles();
+  ctx.restore();
+
+  // 上部HUD: おかね（揺らさない）
+  ctx.fillStyle = '#16204a'; ctx.fillRect(0, 0, W, 34);
+  const max = moneyMax();
+  ctx.fillStyle = '#2c3c70'; ctx.fillRect(8, 8, W - 16, 18);
+  ctx.fillStyle = '#ffd23f'; ctx.fillRect(8, 8, (W - 16) * money / max, 18);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('💰 ' + Math.floor(money) + ' / ' + max + '   サイフLv' + (walletLv+1), 14, 21);
+
+  // ボタンの可否＆サイフ価格更新
+  for (const b of pad.children) {
+    const k = +b.dataset.k;
+    const cost = k === 3 ? walletCost() : ALLY[k].cost;
+    b.disabled = money < cost;
+  }
+  wc.textContent = walletCost();
+}
+
+function end(win) {
+  state = 'over';
+  shake(7, .3);
+  for (let i = 0; i < 3; i++) burst(rand(W*0.3, W*0.7), H*0.4, ['#FF6B6B','#FFD93D','#4D96FF'][i], 18);
+  title.textContent = win ? '🎉 しょうり！' : '💥 まけ…';
+  desc.innerHTML = win
+    ? '敵のお城をこわした！<br>つよかったね！'
+    : 'お城をまもれなかった…<br>サイフを はやくつよくしてみよう。';
+  btn.textContent = 'もう一回';
+  overlay.classList.remove('hide');
+}
+
+function loop() {
+  requestAnimationFrame(loop);
+  if (state === 'play') update();
+  if (state !== 'ready') { updateParticles(1/60); draw(); }
+}
+resize();
+loop();
+</script>
+</body>
+</html>

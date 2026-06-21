@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>キャッチずかん 〜つかまえてあつめよう〜</title>
+<style>
+  :root { --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF; --ink:#2b3a67; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--ink);
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+  #hud { position:absolute; top:max(16px,env(safe-area-inset-top)); left:0; right:0; text-align:center;
+    color:var(--ink); font-weight:800; font-size:22px; pointer-events:none; text-shadow:0 2px 0 #fff; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:rgba(43,58,103,.42); color:#fff; text-align:center; padding:20px; }
+  #overlay h1 { font-size:30px; line-height:1.35; text-shadow:0 3px 0 rgba(0,0,0,.18); }
+  #overlay p { font-size:16px; opacity:.96; }
+  #btn { font-size:23px; font-weight:900; padding:15px 36px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  #btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+  .pop { position:absolute; font-weight:900; font-size:24px; color:var(--pop-green); text-shadow:0 2px 0 #fff;
+    pointer-events:none; transform:translate(-50%,-50%); animation:popUp .85s ease-out forwards; }
+  @keyframes popUp { 0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+    20%{opacity:1; transform:translate(-50%,-65%) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-160%) scale(1);} }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="hud"></div>
+<div id="overlay">
+  <h1 id="title">🐾 キャッチずかん</h1>
+  <p id="desc">おちてくる いきものを タップで つかまえよう！<br>30びょうで なんびき あつめられるかな？</p>
+  <button id="btn">スタート</button>
+</div>
+
+<script>
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const wrap=document.getElementById('wrap'), hud=document.getElementById('hud');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const PAL={red:'#FF6B6B',yellow:'#FFD93D',green:'#6BCB77',blue:'#4D96FF',ink:'#2b3a67'};
+
+let W,H,dpr;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize); resize();
+
+const rand=(a,b)=>a+Math.random()*(b-a);
+let particles=[];
+function burst(x,y,color,n=12){ for(let i=0;i<n;i++){const a=rand(0,Math.PI*2),s=rand(40,150);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-50,life:rand(.4,.7),t:0,c:color,r:rand(2,5)});}}
+function updateParticles(dt){ for(const p of particles){p.t+=dt;p.vy+=520*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;}
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();} ctx.globalAlpha=1; }
+function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
+  el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),900); }
+
+// ===== いきもの（4しゅるい・丸主体・太輪郭・頬）=====
+const TYPES=[
+  {name:'あか', body:PAL.red,   line:'#a83232'},
+  {name:'き',   body:PAL.yellow,line:'#b8920a'},
+  {name:'みどり',body:PAL.green, line:'#3a8a47'},
+  {name:'あお', body:PAL.blue,  line:'#1f4f9e'},
+];
+const TIME=30;
+let mobs, spawnT, timeLeft, caught, total;
+
+function reset(){ mobs=[]; spawnT=0.5; timeLeft=TIME; caught=[0,0,0,0]; total=0; particles=[]; }
+function start(){ reset(); state='play'; overlay.classList.add('hide'); }
+
+function spawn(){ const ti=Math.floor(rand(0,TYPES.length));
+  mobs.push({x:rand(40,W-40), y:-30, vy:rand(90,150), r:24, type:ti, wob:rand(0,7)}); }
+
+cv.addEventListener('pointerdown',e=>{ e.preventDefault(); if(state!=='play')return;
+  const r=cv.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
+  for(let i=mobs.length-1;i>=0;i--){ const m=mobs[i];
+    if(Math.hypot(m.x-x,m.y-y)<m.r+10){
+      caught[m.type]++; total++; burst(m.x,m.y,TYPES[m.type].body,14); numberPop('+1', m.x, m.y); mobs.splice(i,1); break;
+    }
+  }
+});
+window.addEventListener('keydown',e=>{ if(e.code==='Space'){e.preventDefault(); if(state!=='play')start();}});
+btn.addEventListener('click',()=>{ if(state!=='play')start(); });
+
+function finish(){ state='over';
+  let msg = total>=25?'マスターきゅう！🌟': total>=15?'すごい！たくさん！': total>=7?'いいかんじ！':'もういちど ちょうせん！';
+  const zukan = TYPES.map((t,i)=>`${t.name} ${caught[i]}`).join(' / ');
+  title.textContent=`🐾 ${total}ひき つかまえた！`;
+  desc.innerHTML=`${msg}<br><span style="font-size:14px;opacity:.9">ずかん：${zukan}</span><br>もういちど あそぶ？`;
+  btn.textContent='もういちど'; overlay.classList.remove('hide');
+}
+
+function drawSky(){ const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#d9f3ff'); g.addColorStop(1,'#eafff0'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+function drawMob(m){
+  const t=TYPES[m.type], wob=Math.sin((m.y+m.wob*40)*0.05)*3;
+  ctx.save(); ctx.translate(m.x+wob, m.y); ctx.lineJoin='round';
+  ctx.fillStyle=t.body; ctx.strokeStyle=t.line; ctx.lineWidth=4;
+  ctx.beginPath(); ctx.arc(0,0,m.r,0,7); ctx.fill(); ctx.stroke();
+  // 耳っぽい突起
+  ctx.beginPath(); ctx.arc(-m.r*0.5,-m.r*0.8,6,0,7); ctx.arc(m.r*0.5,-m.r*0.8,6,0,7); ctx.fill(); ctx.stroke();
+  // 目
+  ctx.fillStyle=t.line; ctx.beginPath(); ctx.arc(-7,-2,3.6,0,7); ctx.arc(7,-2,3.6,0,7); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(-6,-3.4,1.3,0,7); ctx.arc(8,-3.4,1.3,0,7); ctx.fill();
+  // 頬
+  ctx.fillStyle='rgba(255,107,107,.5)'; ctx.beginPath(); ctx.arc(-12,4,3.4,0,7); ctx.arc(12,4,3.4,0,7); ctx.fill();
+  // 口
+  ctx.strokeStyle=t.line; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,4,2.6,0,Math.PI); ctx.stroke();
+  ctx.restore();
+}
+
+let state='ready', last=0;
+function loop(ts){
+  requestAnimationFrame(loop);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  ctx.clearRect(0,0,W,H); drawSky();
+
+  if(state==='play'){
+    timeLeft-=dt; if(timeLeft<=0){ timeLeft=0; finish(); }
+    spawnT-=dt; if(spawnT<=0){ spawn(); spawnT=rand(0.45,0.9)-Math.min(0.3,(TIME-timeLeft)/120); }
+    for(const m of mobs) m.y+=m.vy*dt;
+    mobs=mobs.filter(m=>m.y<H+40);
+  }
+  for(const m of mobs) drawMob(m);
+  updateParticles(dt); drawParticles();
+
+  hud.textContent = state==='play' ? `⏰ ${Math.ceil(timeLeft)}  🐾 ${total}` : '';
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

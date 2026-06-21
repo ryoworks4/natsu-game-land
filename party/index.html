@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>パーティすごろく</title>
+<style>
+  /* === ぷにぷにポップ 既定スタイル（工房ハウススタイル） === */
+  /* すべてインライン。外部CSS/フォント/画像は禁止＝オフラインで遊べる契約 */
+  :root {
+    --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF;
+    --ink:#2b3a67; --paper:#F2F7FF;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--ink);
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }   /* タップ遅延ゼロ＋スクロール誤爆防止 */
+  #hud { position:absolute; top:max(14px,env(safe-area-inset-top)); left:0; right:0; text-align:center;
+    color:var(--ink); font-weight:800; font-size:20px; pointer-events:none; text-shadow:0 1px 0 #fff; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:rgba(43,58,103,.45); color:#fff; text-align:center; padding:20px; }
+  #overlay h1 { font-size:30px; line-height:1.35; }
+  #overlay p { font-size:16px; opacity:.95; }
+  #btn { font-size:22px; font-weight:800; padding:14px 32px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  #btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+  .pop { position:absolute; font-weight:900; font-size:26px; color:var(--pop-red); text-shadow:0 2px 0 #fff;
+    pointer-events:none; transform:translate(-50%,-50%); animation:popUp .8s ease-out forwards; }
+  @keyframes popUp { 0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+    20%{opacity:1; transform:translate(-50%,-60%) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-150%) scale(1);} }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="hud"></div>
+<!-- リスタート必須: ゲームオーバー/クリア後に必ず「もう一回」を出す -->
+<div id="overlay">
+  <h1 id="title">🎲 パーティすごろく</h1>
+  <p id="desc">タップでサイコロ！コインをあつめて⭐スターをかおう<br>6ターンでスターのおおいひとがゆうしょう🏆</p>
+  <button id="btn">スタート</button>
+</div>
+
+<script>
+// ============ 工房エンジン v2（全ゲーム共通・流用する。外部依存ゼロ） ============
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const wrap=document.getElementById('wrap'), hud=document.getElementById('hud');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const PAL={ red:'#FF6B6B', yellow:'#FFD93D', green:'#6BCB77', blue:'#4D96FF', ink:'#2b3a67' };
+
+let W,H,dpr;
+function resize(){
+  dpr=window.devicePixelRatio||1;                 // Retina でぼやけない（必須）
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize); resize();
+
+// --- 数学・色ヘルパー ---
+const lerp=(a,b,t)=>a+(b-a)*t;
+const easeOut=t=>1-Math.pow(1-t,3);
+const easeOutBack=t=>1+2.7*Math.pow(t-1,3)+1.7*Math.pow(t-1,2);   // ぷにっと弾む
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+function shade(hex,amt){ // amt>0で明るく/<0で暗く（影・ハイライト用）
+  const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const f=v=>clamp(Math.round(v+(amt>0?(255-v)*amt:v*amt)),0,255);
+  return '#'+((1<<24)+(f(r)<<16)+(f(g)<<8)+f(b)).toString(16).slice(1);
+}
+
+// --- 形ヘルパー ---
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+// 接地影（shadowBlur は重いので半透明楕円で描く）
+function groundShadow(x,y,w){ if(w<=0)return; ctx.fillStyle='rgba(43,58,103,.18)';
+  ctx.beginPath(); ctx.ellipse(x,y,w,w*0.28,0,0,7); ctx.fill(); }
+// 安いグロー（shadowBlur 不使用＝層を重ねるだけ）。発光・キラ・太陽に
+function glow(x,y,r,color,layers=4){ for(let i=layers;i>=1;i--){ ctx.globalAlpha=0.12*(i/layers);
+  ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,r*(i/layers),0,7); ctx.fill(); } ctx.globalAlpha=1; }
+// かわいいキャラの土台（丸主体・太輪郭・白ハイライト・頬）。色1つ渡せば成立
+function drawBlob(x,y,r,color,o={}){
+  const line=o.line||shade(color,-0.45);
+  groundShadow(x,y+r*1.05,r*0.95);
+  ctx.lineJoin='round'; ctx.fillStyle=color; ctx.strokeStyle=line; ctx.lineWidth=Math.max(3,r*0.16);
+  ctx.beginPath(); ctx.ellipse(x,y,r,r*0.92,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=shade(color,0.35);                              // 上半分のハイライト帯
+  ctx.beginPath(); ctx.ellipse(x,y-r*0.4,r*0.7,r*0.35,0,0,Math.PI,true); ctx.fill();
+  const ex=r*0.36, ey=-r*0.12, er=Math.max(2.6,r*0.16);         // 目（大きく離す）
+  ctx.fillStyle=line; ctx.beginPath(); ctx.arc(x-ex,y+ey,er,0,7); ctx.arc(x+ex,y+ey,er,0,7); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath();                         // 白ハイライト
+  ctx.arc(x-ex+er*0.35,y+ey-er*0.4,er*0.4,0,7); ctx.arc(x+ex+er*0.35,y+ey-er*0.4,er*0.4,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,107,107,.5)';                          // 頬の赤み
+  ctx.beginPath(); ctx.arc(x-r*0.62,y+r*0.18,r*0.14,0,7); ctx.arc(x+r*0.62,y+r*0.18,r*0.14,0,7); ctx.fill();
+}
+
+// --- 背景：グラデ空＋パララックス雲＋太陽（時間帯で色を変えれば無料でバリエ） ---
+let bgScroll=0;
+function drawSky(top='#aee2ff',mid='#cdeeff',bot='#ffe9b0',sun=true){
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,top); g.addColorStop(.6,mid); g.addColorStop(1,bot);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  if(sun){ glow(W*0.8,H*0.16,46,'#fff2a8'); ctx.fillStyle='#fff2a8';
+    ctx.beginPath(); ctx.arc(W*0.8,H*0.16,24,0,7); ctx.fill(); }
+  ctx.fillStyle='rgba(255,255,255,.9)';
+  for(let i=0;i<3;i++){ const cx=((i*210-bgScroll)%(W+220)+(W+220))%(W+220)-110, cy=H*0.18+i*42;
+    ctx.beginPath(); ctx.arc(cx,cy,17,0,7); ctx.arc(cx+20,cy+5,23,0,7); ctx.arc(cx+45,cy,15,0,7);
+    ctx.rect(cx,cy,45,16); ctx.fill(); }
+}
+// 画面ふちのうっすら暗がり（締まって見える）
+function vignette(){ const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.4,W/2,H/2,Math.max(W,H)*0.75);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(43,58,103,.18)'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+
+// --- ジュース：パーティクル・揺れ・数値ポップ・紙ふぶき ---
+let shakeT=0,shakeMag=0; function shake(mag=6,dur=0.25){ shakeMag=mag; shakeT=dur; }
+let particles=[];
+function burst(x,y,color,n=14){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(40,180);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-40,life:rand(.4,.8),t:0,c:color,r:rand(2,5)}); } }
+function confetti(n=40){ for(let i=0;i<n;i++) particles.push({x:rand(0,W),y:rand(-40,0),
+  vx:rand(-30,30),vy:rand(60,160),life:rand(1.2,2),t:0,c:[PAL.red,PAL.yellow,PAL.green,PAL.blue][i%4],r:rand(3,5)}); }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=520*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1; }
+function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
+  el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),850); }
+
+// --- 入力（Pointer に統一） ---
+function onTap(e){ e.preventDefault(); if(state==='play') action(); }
+cv.addEventListener('pointerdown', onTap);
+window.addEventListener('keydown', e=>{ if(e.code==='Space'){ e.preventDefault();
+  if(state==='play') action(); else start(); } });
+btn.addEventListener('click', ()=>{ if(state!=='play') start(); });
+
+// --- 状態・ループ（rAF + delta 駆動＝フレームレート非依存） ---
+let state='ready', last=0;
+function frame(ts){
+  requestAnimationFrame(frame);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  bgScroll+=(state==='play'?60:12)*dt;
+  ctx.save();
+  if(shakeT>0){ shakeT-=dt; const m=shakeMag*(shakeT>0?1:0); ctx.translate(rand(-m,m),rand(-m,m)); }
+  updateParticles(dt);
+  render(dt);
+  ctx.restore();
+}
+requestAnimationFrame(frame);
+
+// ============ パーティすごろく（マリオパーティ風・自己完結） ============
+// すごろくボードを4人（自分＋CPU3）でまわる。タップでサイコロ→コマが進む→
+// マスの効果でコイン増減・⭐スター購入。6ターンでスター数の多い人が勝ち。
+
+const TOTAL_TURNS = 8;          // 全員がこの回数だけまわす（ボードが広いので増やす）
+const N = 28;                   // ボードのマス数（ループ）
+const STAR_COST = 10;           // スター1個の値段（コイン）
+
+// マスの種類（ループ上に固定配置）。＋青/－赤/⭐スター/？イベント
+//  色とラベルとはたらきを type ごとに持つ
+const TYPES = {
+  blue:  { col:PAL.blue,   lab:'＋', },
+  red:   { col:PAL.red,    lab:'－', },
+  star:  { col:PAL.yellow, lab:'⭐', },
+  event: { col:PAL.green,  lab:'？', },
+};
+// 28マスの並び（スタートは0）。スターマスを3つ、イベントを散らす
+const BOARD = [
+  'blue','blue','red','event','blue', 'star','blue','red','blue','event',
+  'blue','blue','red','blue','star',  'event','blue','red','blue','event',
+  'blue','red','blue','star','event', 'blue','red','blue'
+];
+
+// プレイヤー（0=自分、1〜3=CPU）。色と名前
+const PLAYERS = [
+  { name:'あなた', col:PAL.red,    cpu:false, emoji:'😄' },
+  { name:'ルイ',   col:PAL.green,  cpu:true,  emoji:'🟢' },
+  { name:'ピチ',   col:PAL.yellow, cpu:true,  emoji:'🟡' },
+  { name:'クッパ', col:PAL.blue,   cpu:true,  emoji:'🔵' },
+];
+
+let players, cur, turn, phase, tmr, dice, diceFace, steps, hopT, fromPos, msg, msgCol;
+// phase: 'turnstart' 入力待ち / 'dicing' サイコロ回転 / 'moving' コマ移動 /
+//        'resolve' マス効果表示 / 'between' 次の人へ
+
+function start(){
+  state='play'; overlay.classList.add('hide');
+  players = PLAYERS.map(p=>({ ...p, pos:0, coins:10, stars:0 }));
+  cur=0; turn=1; msg=''; msgCol=PAL.ink;
+  beginTurn();
+}
+
+function beginTurn(){
+  phase='turnstart'; tmr=0; dice=0; diceFace=1;
+  const p=players[cur];
+  msg = p.cpu ? (p.name+' のばん…') : 'タップでサイコロ！';
+  msgCol = p.col;
+}
+
+// サイコロを振る（自分のタップ or CPU自動）
+function rollDice(){
+  if(phase!=='turnstart') return;
+  phase='dicing'; tmr=0;
+  dice = 1 + Math.floor(rand(0,6));            // 1〜6（確定値）
+}
+
+// 入力：自分のターンのみサイコロを振れる
+function action(){ if(!players[cur].cpu) rollDice(); }
+
+// ボード座標：角丸長方形のまわりに N マスを等間隔配置
+function boardRect(){
+  const m=30; return { x:m, y:H*0.205, w:W-m*2, h:H*0.58 };
+}
+function tilePos(i){
+  const r=boardRect(); const L=2*(r.w+r.h); let d=(i/N)*L;
+  if(d<r.w)            return { x:r.x+d,           y:r.y };           // 上辺 →
+  d-=r.w; if(d<r.h)    return { x:r.x+r.w,         y:r.y+d };         // 右辺 ↓
+  d-=r.h; if(d<r.w)    return { x:r.x+r.w-d,       y:r.y+r.h };       // 下辺 ←
+  d-=r.w;             return { x:r.x,             y:r.y+r.h-d };      // 左辺 ↑
+}
+// 同じマスに複数コマがいても重ならないよう少しずらす
+function tokenPos(pl, idx){
+  const base=tilePos(pl.pos);
+  const a=(idx/players.length)*Math.PI*2; const off=13;
+  return { x:base.x+Math.cos(a)*off, y:base.y+Math.sin(a)*off-6 };
+}
+
+// マス効果を適用（コイン増減・スター購入・イベント）
+function resolveTile(){
+  const p=players[cur]; const t=BOARD[p.pos]; const tp=tilePos(p.pos);
+  let text='', col=PAL.ink;
+  if(t==='blue'){ p.coins+=3; text='+3コイン'; col=PAL.blue; burst(tp.x,tp.y,PAL.blue,12); }
+  else if(t==='red'){ const d=Math.min(3,p.coins); p.coins-=d; text='-'+d+'コイン'; col=PAL.red; shake(7,0.25); }
+  else if(t==='star'){
+    if(p.coins>=STAR_COST){ p.coins-=STAR_COST; p.stars++; text='⭐スターGET!'; col='#d9a800';
+      confetti(34); shake(8,0.3); }
+    else { text='コインたりない…'; col=PAL.ink; }
+  } else { // event：ランダムな出来事
+    const ev=[ {c:10,s:0,m:'+10コイン!'},{c:-5,s:0,m:'-5コイン'},{c:5,s:0,m:'+5コイン'},
+               {c:0,s:1,m:'⭐スターGET!'},{c:8,s:0,m:'+8コイン!'} ][Math.floor(rand(0,5))];
+    p.coins=Math.max(0,p.coins+ev.c); p.stars+=ev.s; text=ev.m;
+    col=ev.s? '#d9a800' : (ev.c<0?PAL.red:PAL.green);
+    if(ev.s) confetti(30); else if(ev.c>0) burst(tp.x,tp.y,PAL.green,12);
+  }
+  p.coins=Math.max(0,p.coins);
+  // 画面座標（canvasはdpr変換済みなので css px のままで numberPop）
+  numberPop(text, tp.x, tp.y-18);
+  msg = players[cur].name+': '+text; msgCol=col;
+}
+
+function nextTurn(){
+  cur++;
+  if(cur>=players.length){ cur=0; turn++; }
+  if(turn>TOTAL_TURNS){ endGame(); return; }
+  beginTurn();
+}
+
+function endGame(){
+  state='over';
+  // 勝者＝スター数→同数ならコイン数
+  const sorted=[...players].sort((a,b)=> b.stars-a.stars || b.coins-a.coins);
+  const win=sorted[0]; const youWin = !win.cpu;
+  if(youWin) confetti(70); else shake(12,0.5);
+  setTimeout(()=>{
+    title.textContent = youWin ? '🏆 ゆうしょう！' : '🎉 おわり！';
+    const rank=sorted.map((p,i)=>`${i+1}い ${p.emoji}${p.name}  ⭐${p.stars} 💰${p.coins}`).join('<br>');
+    desc.innerHTML = rank + '<br><br>もういちどあそぶ？';
+    btn.textContent='もういちど';
+    overlay.classList.remove('hide');
+  }, youWin?1200:700);
+}
+
+// ====== 更新（phase ごとに時間で進める） ======
+function update(dt){
+  tmr+=dt;
+  const p=players[cur];
+  if(phase==='turnstart'){
+    if(p.cpu && tmr>0.7) rollDice();           // CPUはすこし待ってから振る
+  }
+  else if(phase==='dicing'){
+    diceFace=1+Math.floor(rand(0,6));          // 出目をパラパラ見せる
+    if(tmr>0.6){ diceFace=dice; phase='moving'; steps=dice; hopT=0; fromPos=p.pos;
+      shake(4,0.12); }
+  }
+  else if(phase==='moving'){
+    hopT+=dt/0.18;                             // 1マス0.18秒で跳ねる
+    if(hopT>=1){ hopT=0; p.pos=(p.pos+1)%N; steps--;
+      if(steps<=0){ phase='resolve'; tmr=0; resolveTile(); } }
+  }
+  else if(phase==='resolve'){
+    if(tmr>1.0){ phase='between'; tmr=0; }
+  }
+  else if(phase==='between'){
+    if(tmr>0.25) nextTurn();
+  }
+}
+
+// ====== 描画 ======
+function drawTile(i){
+  const tp=tilePos(i); const ty=BOARD[i]; const def=TYPES[ty];
+  const s = i===0 ? 17 : 15;
+  groundShadow(tp.x, tp.y+s*0.9, s*0.9);
+  ctx.fillStyle=def.col; ctx.strokeStyle=shade(def.col,-0.4); ctx.lineWidth=3;
+  roundRect(tp.x-s, tp.y-s, s*2, s*2, 7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.font='900 '+(s*1.0)+'px sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(i===0?'🏁':def.lab, tp.x, tp.y+1);
+}
+
+function drawScoreboard(){
+  // 上部に4人のコイン/スターを横並び
+  const y=14, cw=W/4;
+  for(let i=0;i<players.length;i++){
+    const p=players[i]; const x=cw*i;
+    if(i===cur && state==='play'){ ctx.fillStyle='rgba(255,217,61,.85)';
+      roundRect(x+3,y-2,cw-6,46,9); ctx.fill(); }
+    ctx.fillStyle=p.col; ctx.beginPath(); ctx.arc(x+16,y+12,8,0,7); ctx.fill();
+    ctx.strokeStyle=shade(p.col,-0.4); ctx.lineWidth=2; ctx.stroke();
+    ctx.fillStyle=PAL.ink; ctx.font='800 12px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText(p.name, x+28, y+8);
+    ctx.font='800 13px sans-serif';
+    ctx.fillText('⭐'+p.stars+' 💰'+p.coins, x+6, y+30);
+  }
+}
+
+function drawDice(){
+  if(phase!=='dicing' && phase!=='moving' && phase!=='resolve') return;
+  const cx=W/2, cy=H*0.5, s=34;
+  ctx.save();
+  if(phase==='dicing'){ ctx.translate(cx,cy); ctx.rotate(Math.sin(tmr*30)*0.2); ctx.translate(-cx,-cy); }
+  groundShadow(cx,cy+s+6,s*0.9);
+  ctx.fillStyle='#fff'; ctx.strokeStyle=PAL.ink; ctx.lineWidth=4;
+  roundRect(cx-s,cy-s,s*2,s*2,12); ctx.fill(); ctx.stroke();
+  // 目（pip）を出目に応じて配置
+  const pips={1:[[0,0]],2:[[-1,-1],[1,1]],3:[[-1,-1],[0,0],[1,1]],
+    4:[[-1,-1],[1,-1],[-1,1],[1,1]],5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]],
+    6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
+  const f=(phase==='dicing')?diceFace:dice; const d=s*0.5;
+  ctx.fillStyle=PAL.red;
+  for(const [px,py] of pips[f]){ ctx.beginPath(); ctx.arc(cx+px*d,cy+py*d,5,0,7); ctx.fill(); }
+  ctx.restore();
+}
+
+function render(dt){
+  drawSky('#bfe9ff','#e6f6ff','#ffe9c2');
+  if(state==='play') update(dt);
+
+  // ボードのライン（マスを結ぶ）
+  ctx.strokeStyle='rgba(255,255,255,.7)'; ctx.lineWidth=10; ctx.lineCap='round';
+  ctx.beginPath();
+  for(let i=0;i<=N;i++){ const tp=tilePos(i%N); i===0?ctx.moveTo(tp.x,tp.y):ctx.lineTo(tp.x,tp.y); }
+  ctx.closePath(); ctx.stroke();
+  for(let i=0;i<N;i++) drawTile(i);
+
+  // コマ（移動中の人だけ次のマスへ補間しながら跳ねる）
+  for(let i=0;i<players.length;i++){
+    const p=players[i]; let pt=tokenPos(p,i); let hop=0;
+    if(i===cur && phase==='moving'){
+      const base=tilePos(p.pos), nx=tilePos((p.pos+1)%N), off=13, ang=(i/players.length)*Math.PI*2;
+      pt={ x:lerp(base.x,nx.x,hopT)+Math.cos(ang)*off, y:lerp(base.y,nx.y,hopT)-6+Math.sin(ang)*off };
+      hop = Math.sin(hopT*Math.PI)*14;            // 跳ねる弧
+    }
+    drawBlob(pt.x, pt.y-hop, 14, p.col);
+  }
+
+  drawScoreboard();
+  drawDice();
+
+  // 下部メッセージ＋ターン数
+  ctx.fillStyle=PAL.ink; ctx.font='800 16px sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('ターン '+Math.min(turn,TOTAL_TURNS)+' / '+TOTAL_TURNS, W/2, H-58);
+  ctx.fillStyle=msgCol||PAL.ink; ctx.font='900 22px sans-serif';
+  ctx.fillText(msg||'', W/2, H-30);
+  // 自分の番はタップを促す点滅
+  if(phase==='turnstart' && !players[cur].cpu){
+    ctx.globalAlpha=0.5+0.5*Math.sin(performance.now()/200);
+    ctx.fillStyle=PAL.red; ctx.font='900 18px sans-serif';
+    ctx.fillText('▼ タップ ▼', W/2, H*0.5+70); ctx.globalAlpha=1;
+  }
+
+  drawParticles();
+  vignette();
+}
+</script>
+</body>
+</html>

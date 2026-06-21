@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>あつまれ どうぶつの森</title>
+<style>
+  :root { --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF;
+    --ink:#2b3a67; --paper:#F2F7FF; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:#7ec850;
+    font-family:-apple-system,"Hiragino Maru Gothic ProN",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; }
+  #hud { position:absolute; top:max(12px,env(safe-area-inset-top)); left:0; right:0; text-align:center;
+    color:#fff; font-weight:900; font-size:21px; pointer-events:none; text-shadow:0 2px 0 #2b6e2b,0 0 6px rgba(0,0,0,.25); }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:rgba(43,58,103,.45); color:#fff; text-align:center; padding:24px; }
+  #overlay h1 { font-size:30px; line-height:1.35; text-shadow:0 2px 0 #1b5e20; }
+  #overlay p { font-size:16px; opacity:.96; line-height:1.6; max-width:340px; }
+  #btn { font-size:22px; font-weight:800; padding:14px 34px; border:none; border-radius:999px;
+    background:var(--pop-yellow); color:var(--ink); box-shadow:0 6px 0 #d9a800; cursor:pointer;
+    transition:transform .08s, box-shadow .08s; }
+  #btn:active { transform:translateY(4px); box-shadow:0 2px 0 #d9a800; }
+  .hide { display:none !important; }
+  .pop { position:absolute; font-weight:900; font-size:24px; color:#ffae00; text-shadow:0 2px 0 #fff;
+    pointer-events:none; transform:translate(-50%,-50%); animation:popUp .85s ease-out forwards; }
+  @keyframes popUp { 0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+    20%{opacity:1; transform:translate(-50%,-60%) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-150%) scale(1);} }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="hud"></div>
+<div id="overlay">
+  <h1 id="title">🌳 あつまれ どうぶつの森</h1>
+  <p id="desc">木の実🍎・魚🐟・むし🦋・貝🐚 をタップ！<br>どうぶつにも話しかけよう。<br>3000ベルあつめてローンを返そう！</p>
+  <button id="btn">しまへ ゴー</button>
+</div>
+
+<script>
+// ============ 工房エンジン v2（全ゲーム共通・外部依存ゼロ） ============
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const wrap=document.getElementById('wrap'), hud=document.getElementById('hud');
+const overlay=document.getElementById('overlay'), title=document.getElementById('title');
+const desc=document.getElementById('desc'), btn=document.getElementById('btn');
+const PAL={ red:'#FF6B6B', yellow:'#FFD93D', green:'#6BCB77', blue:'#4D96FF', ink:'#2b3a67' };
+
+let W,H,dpr;
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=Math.min(window.innerWidth,480); H=window.innerHeight;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize); resize();
+
+const lerp=(a,b,t)=>a+(b-a)*t;
+const easeOut=t=>1-Math.pow(1-t,3);
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const dist=(ax,ay,bx,by)=>Math.hypot(ax-bx,ay-by);
+function shade(hex,amt){
+  const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const f=v=>clamp(Math.round(v+(amt>0?(255-v)*amt:v*amt)),0,255);
+  return '#'+((1<<24)+(f(r)<<16)+(f(g)<<8)+f(b)).toString(16).slice(1);
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function groundShadow(x,y,w){ if(w<=0)return; ctx.fillStyle='rgba(30,60,20,.18)';
+  ctx.beginPath(); ctx.ellipse(x,y,w,w*0.32,0,0,7); ctx.fill(); }
+function glow(x,y,r,color,layers=4){ for(let i=layers;i>=1;i--){ ctx.globalAlpha=0.12*(i/layers);
+  ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,r*(i/layers),0,7); ctx.fill(); } ctx.globalAlpha=1; }
+function drawBlob(x,y,r,color,o={}){
+  const line=o.line||shade(color,-0.45);
+  groundShadow(x,y+r*1.05,r*0.95);
+  ctx.lineJoin='round'; ctx.fillStyle=color; ctx.strokeStyle=line; ctx.lineWidth=Math.max(3,r*0.16);
+  ctx.beginPath(); ctx.ellipse(x,y,r,r*0.92,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=shade(color,0.35);
+  ctx.beginPath(); ctx.ellipse(x,y-r*0.4,r*0.7,r*0.35,0,0,Math.PI,true); ctx.fill();
+  const ex=r*0.36, ey=-r*0.12, er=Math.max(2.6,r*0.16);
+  ctx.fillStyle=line; ctx.beginPath(); ctx.arc(x-ex,y+ey,er,0,7); ctx.arc(x+ex,y+ey,er,0,7); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath();
+  ctx.arc(x-ex+er*0.35,y+ey-er*0.4,er*0.4,0,7); ctx.arc(x+ex+er*0.35,y+ey-er*0.4,er*0.4,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,107,107,.5)';
+  ctx.beginPath(); ctx.arc(x-r*0.62,y+r*0.18,r*0.14,0,7); ctx.arc(x+r*0.62,y+r*0.18,r*0.14,0,7); ctx.fill();
+}
+function vignette(){ const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.42,W/2,H/2,Math.max(W,H)*0.78);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(20,50,20,.22)'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+
+let shakeT=0,shakeMag=0; function shake(mag=6,dur=0.25){ shakeMag=mag; shakeT=dur; }
+let particles=[];
+function burst(x,y,color,n=14){ for(let i=0;i<n;i++){ const a=rand(0,Math.PI*2),s=rand(40,180);
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-40,life:rand(.4,.8),t:0,c:color,r:rand(2,5)}); } }
+function confetti(n=40){ for(let i=0;i<n;i++) particles.push({x:rand(0,W),y:rand(-40,0),
+  vx:rand(-30,30),vy:rand(60,160),life:rand(1.2,2),t:0,c:[PAL.red,PAL.yellow,PAL.green,PAL.blue][i%4],r:rand(3,5)}); }
+function updateParticles(dt){ for(const p of particles){ p.t+=dt; p.vy+=520*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; }
+  particles=particles.filter(p=>p.t<p.life); }
+function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,1-p.t/p.life);
+  ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill(); } ctx.globalAlpha=1; }
+function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
+  el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),880); }
+
+// --- 状態・ループ ---
+let state='ready', last=0;
+function frame(ts){
+  requestAnimationFrame(frame);
+  const dt=last?Math.min((ts-last)/1000,0.05):0; last=ts;
+  ctx.save();
+  if(shakeT>0){ shakeT-=dt; const m=shakeMag*(shakeT>0?1:0); ctx.translate(rand(-m,m),rand(-m,m)); }
+  updateParticles(dt);
+  render(dt);
+  ctx.restore();
+}
+requestAnimationFrame(frame);
+
+// ============ ここからゲーム固有：あつまれ どうぶつの森 ============
+const GOAL=3000;
+let bells=0;
+const player={x:0,y:0,tx:0,ty:0,bob:0,face:1};
+let pending=null;            // 近づいたら採取する対象
+let trees=[], fishes=[], bugs=[], shells=[], villagers=[];
+let pondTimer=0;             // 水面・波のアニメ用
+let ground=null, shimmer=[], leaves=[];   // 焼いた地面・池のきらめき・落ち葉
+
+// 池（魚がいる）と砂浜（貝がある）のレイアウト
+function pond(){ return {cx:W*0.30, cy:H*0.26, rx:W*0.27, ry:H*0.115}; }
+function beachY(){ return H*0.86; }      // 砂浜の中心ライン
+function seaY(){ return H*0.91; }        // ここから下は海
+
+const TALK=[
+  'いい てんきだね〜！','きょうも たのしいね♪','むし とれた？','うみのおと きこえる？',
+  'おさかな いっぱい いるよ','その ふく すてきだね！','また あそぼうね〜','おなか すいたな…',
+  'はっぱの においが すき','きょうの あなたは キラキラだね！'];
+
+function start(){
+  state='play'; overlay.classList.add('hide');
+  bells=0; pending=null; particles=[]; leaves=[]; ground=null;
+  player.x=W*0.5; player.y=H*0.62; player.tx=player.x; player.ty=player.y; player.bob=0; player.face=1;
+
+  // 木（実つき）を配置（池と浜をよける）
+  trees=[
+    {x:W*0.78,y:H*0.30}, {x:W*0.84,y:H*0.52}, {x:W*0.20,y:H*0.52},
+    {x:W*0.62,y:H*0.66}, {x:W*0.16,y:H*0.70}
+  ].map(t=>({...t, fruit:true, regrow:0, kind:Math.floor(rand(0,3))}));
+
+  // 魚（池の中をゆらゆら）
+  fishes=[]; for(let i=0;i<3;i++) fishes.push(makeFish());
+  // むし（草原をひらひら）
+  bugs=[]; for(let i=0;i<3;i++) bugs.push(makeBug());
+  // 貝（砂浜）
+  shells=[]; for(let i=0;i<3;i++) shells.push(makeShell());
+  // どうぶつ（はなしかけると たまに プレゼント）
+  villagers=[
+    {name:'ポチ', col:'#f6c64b', x:W*0.40,y:H*0.50, dx:rand(-1,1),dy:rand(-1,1), ear:'dog', say:'',sayT:0, gift:0},
+    {name:'ミィ', col:'#ff9ec4', x:W*0.66,y:H*0.46, dx:rand(-1,1),dy:rand(-1,1), ear:'cat', say:'',sayT:0, gift:0},
+    {name:'ぴょん',col:'#bfa7ff', x:W*0.50,y:H*0.74, dx:rand(-1,1),dy:rand(-1,1), ear:'rabbit',say:'',sayT:0, gift:0},
+  ];
+}
+function makeFish(){ const p=pond(), a=rand(0,7), rr=rand(0,0.8);
+  return {x:p.cx+Math.cos(a)*p.rx*rr, y:p.cy+Math.sin(a)*p.ry*rr, dir:rand(0,7), ready:true, t:0}; }
+function makeBug(){ return {x:rand(W*0.1,W*0.9), y:rand(H*0.40,H*0.78), ph:rand(0,7), drift:rand(-1,1), ready:true, t:0, kind:Math.floor(rand(0,3))}; }
+function makeShell(){ return {x:rand(W*0.12,W*0.88), y:beachY()+rand(-6,8), ready:true, t:0, kind:Math.floor(rand(0,2))}; }
+
+// --- 入力：タップした所へ歩く。対象に近いとそれを採りに行く ---
+function tapAt(px,py){
+  if(state!=='play') return;
+  // タップ地点に最も近い採取対象（44px以内）をさがす
+  let best=null, bd=44;
+  const consider=(obj,ox,oy)=>{ const d=dist(px,py,ox,oy); if(d<bd){ bd=d; best=obj; } };
+  for(const t of trees) if(t.fruit) consider({type:'tree',ref:t}, t.x, t.y-44);
+  for(const f of fishes) if(f.ready) consider({type:'fish',ref:f}, f.x, f.y);
+  for(const b of bugs) if(b.ready) consider({type:'bug',ref:b}, b.x, b.y);
+  for(const s of shells) if(s.ready) consider({type:'shell',ref:s}, s.x, s.y);
+  for(const v of villagers) consider({type:'villager',ref:v}, v.x, v.y-30);
+  if(best){ pending=best; const o=best.ref; player.tx=clamp(o.x,16,W-16); player.ty=clamp(o.y+34,40,seaY()); }
+  else { pending=null; player.tx=clamp(px,16,W-16); player.ty=clamp(py,40,seaY()); }
+  if(player.tx<player.x) player.face=-1; else if(player.tx>player.x) player.face=1;
+}
+cv.addEventListener('pointerdown', e=>{ e.preventDefault();
+  const r=cv.getBoundingClientRect(); tapAt(e.clientX-r.left, e.clientY-r.top); });
+btn.addEventListener('click', ()=>{ if(state!=='play') start(); });
+window.addEventListener('keydown', e=>{ if(e.code==='Space'){ e.preventDefault(); if(state!=='play') start(); } });
+
+function addBells(n,x,y){ bells+=n; numberPop('+'+n, x, y);
+  if(bells>=GOAL && state==='play') clearGame(); }
+
+function interact(o){
+  const r=o.ref;
+  if(o.type==='tree'){ r.fruit=false; r.regrow=rand(5,9); burst(r.x,r.y-44,PAL.red,16); shake(4,.15);
+    addBells(100, r.x, r.y-60); }
+  else if(o.type==='fish'){ r.ready=false; r.t=0; burst(r.x,r.y,'#bfe9ff',16); shake(5,.18);
+    addBells(300, r.x, r.y-20); }
+  else if(o.type==='bug'){ r.ready=false; r.t=0; burst(r.x,r.y,'#ffe08a',14);
+    addBells(200, r.x, r.y-20); }
+  else if(o.type==='shell'){ r.ready=false; r.t=0; burst(r.x,r.y,'#ffd9ec',12);
+    addBells(50, r.x, r.y-16); }
+  else if(o.type==='villager'){ r.say=TALK[Math.floor(rand(0,TALK.length))]; r.sayT=2.4;
+    r.gift++; if(r.gift>=3){ r.gift=0; r.say='はい、プレゼント！🎁'; burst(r.x,r.y-24,PAL.yellow,18);
+      addBells(250, r.x, r.y-50); } }
+  pending=null;
+}
+
+function clearGame(){
+  state='clear'; confetti(70); shake(8,.4);
+  title.textContent='🎉 ローン かんさい！';
+  desc.innerHTML=`${GOAL}ベル あつめたよ！<br>しまの どうぶつたちも おおよろこび♪<br>すごい たんけんかだね！`;
+  btn.textContent='もう一回';
+  overlay.classList.remove('hide');
+}
+
+function update(dt){
+  // プレイヤー移動
+  const d=dist(player.x,player.y,player.tx,player.ty);
+  if(d>2){ const sp=Math.min(d, 175*dt); player.x+=(player.tx-player.x)/d*sp; player.y+=(player.ty-player.y)/d*sp;
+    player.bob+=dt*12; }
+  // 採取対象に到着したら実行
+  if(pending){ const o=pending.ref; const ix=o.x, iy=(pending.type==='tree')?o.y-30:(pending.type==='villager')?o.y-10:o.y;
+    if(dist(player.x,player.y,ix,iy)<54) interact(pending); }
+
+  // 木の実 再生
+  for(const t of trees){ if(!t.fruit){ t.regrow-=dt; if(t.regrow<=0) t.fruit=true; } }
+  // 魚 ゆらゆら＋復活
+  const p=pond();
+  for(const f of fishes){ if(f.ready){ f.dir+=rand(-1,1)*dt; f.x+=Math.cos(f.dir)*22*dt; f.y+=Math.sin(f.dir)*14*dt;
+      const nx=(f.x-p.cx)/p.rx, ny=(f.y-p.cy)/p.ry; if(nx*nx+ny*ny>0.82){ f.dir=Math.atan2(p.cy-f.y,p.cx-f.x)+rand(-.5,.5); } }
+    else { f.t+=dt; if(f.t>rand(2.5,4)){ const nf=makeFish(); f.x=nf.x; f.y=nf.y; f.dir=nf.dir; f.ready=true; } } }
+  // むし ひらひら＋復活
+  for(const b of bugs){ if(b.ready){ b.ph+=dt*4; b.x+=b.drift*18*dt + Math.cos(b.ph)*8*dt; b.y+=Math.sin(b.ph*1.3)*16*dt;
+      if(b.x<W*0.06||b.x>W*0.94) b.drift*=-1; b.y=clamp(b.y,H*0.36,H*0.80); }
+    else { b.t+=dt; if(b.t>rand(2,3.5)) Object.assign(b, makeBug()); } }
+  // 貝 復活
+  for(const s of shells){ if(!s.ready){ s.t+=dt; if(s.t>rand(3,5)) Object.assign(s, makeShell()); } }
+  // どうぶつ うろうろ
+  for(const v of villagers){ if(v.sayT>0) v.sayT-=dt;
+    v.x+=v.dx*16*dt; v.y+=v.dy*12*dt;
+    if(v.x<W*0.10||v.x>W*0.90){ v.dx*=-1; v.x=clamp(v.x,W*0.10,W*0.90); }
+    if(v.y<H*0.38||v.y>H*0.80){ v.dy*=-1; v.y=clamp(v.y,H*0.38,H*0.80); }
+    if(Math.random()<dt*0.3){ v.dx=rand(-1,1); v.dy=rand(-1,1); } }
+}
+
+// --- 固定シード乱数（テクスチャがリサイズでちらつかない） ---
+function makeRng(seed){ let s=seed>>>0; return ()=>{ s=(s+0x6D2B79F5)>>>0; let t=Math.imul(s^(s>>>15),1|s);
+  t=(t+Math.imul(t^(t>>>7),61|t))^t; return ((t^(t>>>14))>>>0)/4294967296; }; }
+
+// --- 地面を1枚に焼く（芝の質感・砂粒・池の底は静的なのでキャッシュして毎フレ drawImage） ---
+function buildGround(){
+  const g=document.createElement('canvas'); g.width=Math.round(W*dpr); g.height=Math.round(H*dpr);
+  const x=g.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0);
+  const rng=makeRng(20260621);
+  // 芝（奥→手前の遠近グラデ）
+  const gr=x.createLinearGradient(0,0,0,H); gr.addColorStop(0,'#8ccb5c'); gr.addColorStop(.5,'#7cbe4c'); gr.addColorStop(1,'#6cb23d');
+  x.fillStyle=gr; x.fillRect(0,0,W,H);
+  // 芝の濃淡パッチ（地面に表情）
+  for(let i=0;i<150;i++){ const px=rng()*W, py=rng()*H*0.92, rr=4+rng()*18;
+    x.fillStyle=`rgba(${60+rng()*40|0},${130+rng()*55|0},${50+rng()*30|0},0.16)`;
+    x.beginPath(); x.ellipse(px,py,rr,rr*0.6,0,0,7); x.fill(); }
+  // 芝の短い葉（手前ほど長く＝奥行き）
+  for(let i=0;i<300;i++){ const py=H*0.18+rng()*H*0.74, px=rng()*W, len=2+(py/H)*5;
+    x.strokeStyle=`rgba(${48+rng()*30|0},${118+rng()*40|0},42,0.5)`; x.lineWidth=1.2;
+    x.beginPath(); x.moveTo(px,py); x.lineTo(px-1.4,py-len); x.moveTo(px,py); x.lineTo(px+1.4,py-len); x.stroke(); }
+  // 海ベース（深さグラデ）
+  const sea=x.createLinearGradient(0,seaY(),0,H); sea.addColorStop(0,'#5cc6e0'); sea.addColorStop(1,'#2a8fc6');
+  x.fillStyle=sea; x.fillRect(0,seaY(),W,H-seaY());
+  // 砂浜
+  x.fillStyle='#efd79a'; x.beginPath();
+  x.moveTo(0,seaY()); x.quadraticCurveTo(W*0.5,seaY()-22,W,seaY()); x.lineTo(W,seaY()-30);
+  x.quadraticCurveTo(W*0.5,seaY()-54,0,seaY()-30); x.closePath(); x.fill();
+  // 砂の粒
+  for(let i=0;i<140;i++){ const px=rng()*W, py=seaY()-30+rng()*36;
+    x.fillStyle=`rgba(${205+rng()*40|0},${172+rng()*30|0},108,0.45)`; x.fillRect(px,py,1.6,1.6); }
+  // 濡れた波打ち際
+  x.fillStyle='rgba(120,90,40,.16)'; x.beginPath();
+  x.moveTo(0,seaY()-2); x.quadraticCurveTo(W*0.5,seaY()-20,W,seaY()-2);
+  x.lineTo(W,seaY()+3); x.quadraticCurveTo(W*0.5,seaY()-15,0,seaY()+3); x.closePath(); x.fill();
+  // 池の底（岸のソフト影＋深さの放射グラデ）
+  const p=pond();
+  x.fillStyle='rgba(40,80,30,.22)'; x.beginPath(); x.ellipse(p.cx,p.cy+2,p.rx+9,p.ry+9,0,0,7); x.fill();
+  const wg=x.createRadialGradient(p.cx,p.cy-p.ry*0.25,2,p.cx,p.cy,p.rx);
+  wg.addColorStop(0,'#2d6a8e'); wg.addColorStop(.55,'#3f93b8'); wg.addColorStop(1,'#73c6e0');
+  x.fillStyle=wg; x.beginPath(); x.ellipse(p.cx,p.cy,p.rx,p.ry,0,0,7); x.fill();
+  ground=g;
+  // 池のきらめき点（リサイズで池が変わるのでここで作り直す）
+  shimmer=[]; for(let i=0;i<18;i++){ const a=rand(0,7), rr=rand(0,0.85);
+    shimmer.push({x:p.cx+Math.cos(a)*p.rx*rr, y:p.cy+Math.sin(a)*p.ry*rr, ph:rand(0,7)}); }
+}
+window.addEventListener('resize',()=>{ ground=null; });   // 次フレームで焼き直し
+
+// --- 動く水面（反射の帯＋きらめき＋ふち光） ---
+function drawWater(){
+  const p=pond();
+  ctx.save(); ctx.beginPath(); ctx.ellipse(p.cx,p.cy,p.rx,p.ry,0,0,7); ctx.clip();
+  ctx.fillStyle='rgba(255,255,255,.10)';
+  for(let i=0;i<3;i++){ const yy=p.cy-p.ry*0.5+i*p.ry*0.55+Math.sin(pondTimer*1.5+i)*3;
+    ctx.fillRect(p.cx-p.rx,yy,p.rx*2,2.5); }
+  ctx.globalCompositeOperation='lighter';
+  for(const s of shimmer){ const tw=0.5+0.5*Math.sin(pondTimer*3+s.ph);
+    ctx.globalAlpha=tw*0.55; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(s.x,s.y,1.4+tw,0,7); ctx.fill(); }
+  ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over'; ctx.restore();
+  ctx.strokeStyle='rgba(255,255,255,.35)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.ellipse(p.cx,p.cy-1,p.rx-1,p.ry-1,0,Math.PI*1.05,Math.PI*1.95); ctx.stroke();
+}
+// --- 海の波＋寄せ波の泡 ---
+function drawSea(){
+  ctx.strokeStyle='rgba(255,255,255,.45)'; ctx.lineWidth=2.5;
+  for(let k=0;k<3;k++){ ctx.beginPath();
+    for(let xx=0;xx<=W;xx+=14){ const yy=seaY()+10+k*9+Math.sin(xx*0.07+pondTimer*1.8+k)*3;
+      xx===0?ctx.moveTo(xx,yy):ctx.lineTo(xx,yy); } ctx.stroke(); }
+  ctx.strokeStyle='rgba(255,255,255,.7)'; ctx.lineWidth=3; ctx.beginPath();
+  for(let xx=0;xx<=W;xx+=12){ const yy=seaY()-3+Math.sin(xx*0.09+pondTimer*2.2)*4;
+    xx===0?ctx.moveTo(xx,yy):ctx.lineTo(xx,yy); } ctx.stroke();
+}
+
+// --- 果物（球グラデ＋ハイライト＋ヘタ＋葉でリアルに） ---
+function drawFruit(x,y,r,kind){
+  ctx.fillStyle='rgba(20,40,15,.18)'; ctx.beginPath(); ctx.ellipse(x,y+r*0.9,r*0.7,r*0.3,0,0,7); ctx.fill();
+  const cols=[['#e8413a','#9e1410'],['#ff9f1c','#d96f00'],['#c5d86d','#8ea832']][kind%3];
+  const g=ctx.createRadialGradient(x-r*0.35,y-r*0.4,r*0.1,x,y,r*1.15);
+  g.addColorStop(0,shade(cols[0],0.45)); g.addColorStop(.6,cols[0]); g.addColorStop(1,cols[1]);
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.5)'; ctx.beginPath(); ctx.ellipse(x-r*0.34,y-r*0.4,r*0.28,r*0.16,-0.6,0,7); ctx.fill();
+  ctx.strokeStyle='#5b3a1a'; ctx.lineWidth=Math.max(1.4,r*0.12); ctx.beginPath();
+  ctx.moveTo(x,y-r*0.85); ctx.lineTo(x+r*0.12,y-r*1.35); ctx.stroke();
+  ctx.fillStyle='#4caf50'; ctx.beginPath(); ctx.ellipse(x+r*0.5,y-r*1.15,r*0.4,r*0.18,0.6,0,7); ctx.fill();
+}
+// --- 貝（扇貝／巻貝） ---
+function drawShell(x,y,kind){
+  ctx.fillStyle='rgba(120,90,40,.2)'; ctx.beginPath(); ctx.ellipse(x,y+7,12,4,0,0,7); ctx.fill();
+  if(kind===0){
+    const g=ctx.createLinearGradient(x,y-12,x,y+8); g.addColorStop(0,'#ffe3cf'); g.addColorStop(1,'#e2937c');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.moveTo(x,y+8); ctx.arc(x,y+8,12,Math.PI,0); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle='rgba(170,85,65,.55)'; ctx.lineWidth=1.4;
+    for(let i=-2;i<=2;i++){ ctx.beginPath(); ctx.moveTo(x,y+8); ctx.lineTo(x+i*5,y-3.5); ctx.stroke(); }
+  } else {
+    const g=ctx.createRadialGradient(x-3,y-3,1,x,y,12); g.addColorStop(0,'#fff3e0'); g.addColorStop(1,'#d79e66');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,11,0,7); ctx.fill();
+    ctx.strokeStyle='rgba(150,90,40,.55)'; ctx.lineWidth=1.4; ctx.beginPath();
+    for(let a=0;a<6.5;a+=0.25){ const rr=1.5+a*1.4; const px=x+Math.cos(a*2)*rr, py=y+Math.sin(a*2)*rr;
+      a===0?ctx.moveTo(px,py):ctx.lineTo(px,py); } ctx.stroke();
+  }
+}
+// --- 魚かげ（体＋尾びれ＋背びれ） ---
+function drawFishShadow(f){
+  ctx.save(); ctx.translate(f.x,f.y); ctx.rotate(f.dir); ctx.fillStyle='rgba(18,52,72,.5)';
+  ctx.beginPath(); ctx.ellipse(0,0,11,5.5,0,0,7); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-9,0); ctx.lineTo(-17,-6); ctx.lineTo(-17,6); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(2,-5); ctx.lineTo(6,-11); ctx.lineTo(9,-4); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+// --- 蝶（羽ばたき） ---
+function drawButterfly(b){
+  const wy=0.45+Math.abs(Math.sin(b.ph*3))*0.55;
+  const cols=[['#ff8fb0','#ffd24d'],['#9ecbff','#cdebff'],['#ffd24d','#ff9f43']][b.kind%3];
+  ctx.fillStyle='rgba(20,40,15,.10)'; ctx.beginPath(); ctx.ellipse(b.x,b.y+18,7,2.5,0,0,7); ctx.fill();
+  ctx.save(); ctx.translate(b.x,b.y);
+  for(const s of [-1,1]){
+    ctx.fillStyle=cols[0]; ctx.beginPath(); ctx.ellipse(s*7*wy,-3,7*wy,6,s*0.4,0,7); ctx.fill();
+    ctx.fillStyle=cols[1]; ctx.beginPath(); ctx.ellipse(s*6*wy,5,5*wy,5,s*0.3,0,7); ctx.fill();
+    ctx.fillStyle='rgba(0,0,0,.12)'; ctx.beginPath(); ctx.arc(s*7*wy,-3,1.8,0,7); ctx.fill();
+  }
+  ctx.fillStyle='#333'; ctx.fillRect(-1.1,-7,2.2,15); ctx.restore();
+}
+
+// --- キャラ（放射グラデで立体・ソフト影・つやハイライト） ---
+function drawCreature(x,y,r,color,opt={}){
+  for(let i=3;i>=1;i--){ ctx.globalAlpha=0.10; ctx.fillStyle='#163a10';
+    ctx.beginPath(); ctx.ellipse(x,y+r*1.02,r*(0.55+0.2*i),r*(0.16+0.05*i),0,0,7); ctx.fill(); }
+  ctx.globalAlpha=1;
+  const line=opt.line||shade(color,-0.5);
+  const g=ctx.createRadialGradient(x-r*0.3,y-r*0.42,r*0.2,x,y+r*0.2,r*1.25);
+  g.addColorStop(0,shade(color,0.42)); g.addColorStop(.55,color); g.addColorStop(1,shade(color,-0.3));
+  ctx.fillStyle=g; ctx.strokeStyle=line; ctx.lineWidth=Math.max(2,r*0.10); ctx.lineJoin='round';
+  ctx.beginPath(); ctx.ellipse(x,y,r,r*0.94,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='rgba(255,255,255,.32)'; ctx.beginPath(); ctx.ellipse(x-r*0.3,y-r*0.45,r*0.4,r*0.2,-0.5,0,7); ctx.fill();
+  const ex=r*0.34, ey=-r*0.10, er=Math.max(3,r*0.20);
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(x-ex,y+ey,er,0,7); ctx.arc(x+ex,y+ey,er,0,7); ctx.fill();
+  ctx.fillStyle=line; ctx.beginPath(); ctx.arc(x-ex+er*0.12,y+ey,er*0.55,0,7); ctx.arc(x+ex+er*0.12,y+ey,er*0.55,0,7); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(x-ex+er*0.4,y+ey-er*0.4,er*0.22,0,7); ctx.arc(x+ex+er*0.4,y+ey-er*0.4,er*0.22,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,120,120,.45)'; ctx.beginPath();
+  ctx.arc(x-r*0.6,y+r*0.22,r*0.15,0,7); ctx.arc(x+r*0.6,y+r*0.22,r*0.15,0,7); ctx.fill();
+}
+
+// --- 落ち葉（風にひらひら舞う環境演出） ---
+function spawnLeaf(){ leaves.push({x:rand(0,W), y:-12, vx:rand(-15,5), vy:rand(20,45),
+  rot:rand(0,7), vr:rand(-2,2), sw:rand(0,7), r:rand(4,7), c:['#e0903a','#cf5a2a','#7fb53f','#f0b54a'][Math.floor(rand(0,4))]}); }
+function updateLeaves(dt){ if(Math.random()<dt*1.1) spawnLeaf();
+  for(const l of leaves){ l.sw+=dt*2; l.x+=(l.vx+Math.sin(l.sw)*18)*dt; l.y+=l.vy*dt; l.rot+=l.vr*dt; }
+  leaves=leaves.filter(l=>l.y<H+14); }
+function drawLeaves(){ for(const l of leaves){ ctx.save(); ctx.translate(l.x,l.y); ctx.rotate(l.rot);
+  ctx.fillStyle=l.c; ctx.beginPath(); ctx.ellipse(0,0,l.r,l.r*0.5,0,0,7); ctx.fill();
+  ctx.strokeStyle='rgba(0,0,0,.15)'; ctx.lineWidth=0.8; ctx.beginPath(); ctx.moveTo(-l.r,0); ctx.lineTo(l.r,0); ctx.stroke();
+  ctx.restore(); } }
+
+// --- 光（木漏れ日の加算ライト＋暖色アンビエント） ---
+function drawLight(){
+  ctx.globalCompositeOperation='lighter';
+  for(let i=0;i<5;i++){ const lx=W*(0.18+0.16*i)+Math.sin(pondTimer*0.3+i)*22;
+    const ly=H*(0.28+0.12*(i%3))+Math.cos(pondTimer*0.25+i)*16;
+    const g=ctx.createRadialGradient(lx,ly,0,lx,ly,75); g.addColorStop(0,'rgba(255,250,205,.10)'); g.addColorStop(1,'rgba(255,250,205,0)');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(lx,ly,75,0,7); ctx.fill(); }
+  ctx.globalCompositeOperation='source-over';
+  ctx.fillStyle='rgba(255,200,120,.05)'; ctx.fillRect(0,0,W,H);
+}
+
+function drawTree(t){
+  // 濃い接地影（多層でやわらかく）
+  for(let i=2;i>=1;i--){ ctx.globalAlpha=0.12; ctx.fillStyle='#143209';
+    ctx.beginPath(); ctx.ellipse(t.x,t.y+6,20+i*7,8+i*2,0,0,7); ctx.fill(); } ctx.globalAlpha=1;
+  // 幹（横グラデ＋縦の木目）
+  const tg=ctx.createLinearGradient(t.x-8,0,t.x+8,0);
+  tg.addColorStop(0,'#7a4f2a'); tg.addColorStop(.5,'#9c6b3f'); tg.addColorStop(1,'#6e451f');
+  ctx.fillStyle=tg; roundRect(t.x-7,t.y-36,14,42,5); ctx.fill();
+  ctx.strokeStyle='rgba(80,50,20,.45)'; ctx.lineWidth=1;
+  for(let i=-1;i<=1;i++){ ctx.beginPath(); ctx.moveTo(t.x+i*4,t.y-33); ctx.lineTo(t.x+i*4,t.y+2); ctx.stroke(); }
+  // 葉（塊ごとに放射グラデで陰影）
+  const base=['#3f9b46','#4fae54','#3a8f43'][t.kind%3];
+  for(const o of [[-18,-48,22],[18,-48,22],[0,-66,26],[-10,-58,20],[10,-58,20],[0,-46,24]]){
+    const cx=t.x+o[0], cy=t.y+o[1], rr=o[2];
+    const lg=ctx.createRadialGradient(cx-rr*0.3,cy-rr*0.4,rr*0.2,cx,cy,rr);
+    lg.addColorStop(0,shade(base,0.3)); lg.addColorStop(1,shade(base,-0.26));
+    ctx.fillStyle=lg; ctx.beginPath(); ctx.arc(cx,cy,rr,0,7); ctx.fill(); }
+  ctx.fillStyle='rgba(255,255,255,.12)'; ctx.beginPath(); ctx.arc(t.x-8,t.y-70,14,0,7); ctx.fill();
+  // 果物（canvas 描画）
+  if(t.fruit){ drawFruit(t.x-13,t.y-44,9,t.kind); drawFruit(t.x+14,t.y-52,9,t.kind); }
+}
+function drawVillager(v){
+  drawCreature(v.x, v.y, 22, v.col);
+  // みみ
+  ctx.fillStyle=v.col; ctx.strokeStyle=shade(v.col,-0.45); ctx.lineWidth=3;
+  if(v.ear==='cat'){ for(const s of [-1,1]){ ctx.beginPath(); ctx.moveTo(v.x+s*10,v.y-18);
+      ctx.lineTo(v.x+s*16,v.y-32); ctx.lineTo(v.x+s*2,v.y-24); ctx.closePath(); ctx.fill(); ctx.stroke(); } }
+  else if(v.ear==='dog'){ for(const s of [-1,1]){ ctx.beginPath();
+      ctx.ellipse(v.x+s*18,v.y-8,7,12,s*0.4,0,7); ctx.fill(); ctx.stroke(); } }
+  else { for(const s of [-1,1]){ ctx.beginPath(); ctx.ellipse(v.x+s*8,v.y-30,6,14,s*0.15,0,7); ctx.fill(); ctx.stroke(); } }
+  if(v.sayT>0){ const tw=Math.max(60, v.say.length*15+24);
+    ctx.fillStyle='#fff'; ctx.strokeStyle='#cfd8e3'; ctx.lineWidth=2;
+    roundRect(v.x-tw/2, v.y-72, tw, 30, 10); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(v.x-6,v.y-44); ctx.lineTo(v.x+6,v.y-44); ctx.lineTo(v.x,v.y-36); ctx.closePath();
+    ctx.fillStyle='#fff'; ctx.fill();
+    ctx.fillStyle='#2b3a67'; ctx.font='bold 15px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(v.say, v.x, v.y-57); }
+}
+function drawPlayer(){
+  const bob=Math.sin(player.bob)* (dist(player.x,player.y,player.tx,player.ty)>2?3:0);
+  drawCreature(player.x, player.y-bob, 20, PAL.blue);
+  // ぼうし
+  ctx.fillStyle=PAL.red; ctx.strokeStyle=shade(PAL.red,-0.4); ctx.lineWidth=3;
+  ctx.beginPath(); ctx.ellipse(player.x, player.y-18-bob, 17, 7, 0,0,7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(player.x, player.y-22-bob, 11, Math.PI, 0); ctx.fill(); ctx.stroke();
+}
+
+function render(dt){
+  if(state==='play'){ pondTimer+=dt; update(dt); updateLeaves(dt); }
+  else { pondTimer+=dt*0.5; updateLeaves(dt); }
+
+  if(!ground) buildGround();
+  ctx.drawImage(ground,0,0,W,H);   // 焼いた地面（芝・砂・池の底）
+  drawWater();                      // 動く水面
+  drawSea();                        // 海の波
+
+  // 魚かげ（池の中）
+  for(const f of fishes) if(f.ready) drawFishShadow(f);
+  // 貝（砂浜）
+  for(const s of shells) if(s.ready) drawShell(s.x,s.y,s.kind);
+  // 木（奥）
+  for(const t of trees) drawTree(t);
+
+  // y順に キャラ＆蝶を重ねる（奥→手前）
+  const ents=[];
+  for(const v of villagers) ents.push({y:v.y, draw:()=>drawVillager(v)});
+  ents.push({y:player.y, draw:drawPlayer});
+  for(const b of bugs) if(b.ready) ents.push({y:b.y, draw:()=>drawButterfly(b)});
+  ents.sort((a,b)=>a.y-b.y); for(const e of ents) e.draw();
+
+  drawLeaves();        // 舞う落ち葉
+  drawParticles();
+  drawLight();         // 木漏れ日＋暖色アンビエント
+  vignette();
+
+  const left=Math.max(0,GOAL-bells);
+  hud.textContent = state==='clear' ? `🔔 ${bells} ベル — クリア！`
+    : `🔔 ${bells} / ${GOAL}  （あと ${left}）`;
+}
+</script>
+</body>
+</html>
