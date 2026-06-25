@@ -235,7 +235,7 @@ function updatePlay(dt){
   const dzOf=o=>{ let d=((o.pos-tp)%LEN+LEN)%LEN; return d; };
   for(const o of coins){ if(o.taken)continue; if(dzOf(o)<1.7 && Math.abs(o.ox-playerX)<0.42){
     o.taken=true; coinsGot++; burst(W/2,H*0.78,PAL.yellow,10); numberPop('+1',W/2,H*0.66); } }
-  // ❓ボックス：手持ちが空のときだけ取れる（マリオカート流）
+  // ❓ボックス：手持ちが空のときだけ取れる（アイテムレース流）
   for(const o of boxes){ if(o.taken||heldItem)continue; if(dzOf(o)<1.7 && Math.abs(o.ox-playerX)<0.55){
     o.taken=true; heldItem=rollItem(); burst(W/2,H*0.8,'#FFD93D',14); shake(3,0.15);
     numberPop('GET! '+ITEM_ICON[heldItem],W/2,H*0.64,'#fff'); } }

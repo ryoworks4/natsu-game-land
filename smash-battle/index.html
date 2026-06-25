@@ -111,7 +111,7 @@ function drawParticles(){ for(const p of particles){ ctx.globalAlpha=Math.max(0,
 function numberPop(text,sx,sy){ const el=document.createElement('div'); el.className='pop'; el.textContent=text;
   el.style.left=sx+'px'; el.style.top=sy+'px'; wrap.appendChild(el); setTimeout(()=>el.remove(),850); }
 
-// ============ ゲーム固有：スマブラ風アクション ============
+// ============ ゲーム固有：大らんとうアクション ============
 const ROSTER=[
   {name:'ファイ', color:PAL.red,    emoji:'🔥'},
   {name:'アクア', color:PAL.blue,   emoji:'💧'},
@@ -181,7 +181,7 @@ function applyHit(att,def){
   if(def.invul>0) return;
   const add=Math.round(rand(7,13));
   def.dmg+=add;
-  // ノックバック：ダメージ％が高いほど大きい（スマブラの核）
+  // ノックバック：ダメージ％が高いほど大きい（ふっとばしの核）
   const power=4.2 + def.dmg*0.085;
   const dir=att.face;
   def.vx=dir*power*60;

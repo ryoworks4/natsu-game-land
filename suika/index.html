@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>スイカゲーム</title>
+<title>おとして フルーツパズル</title>
 <style>
   /* === ぷにぷにポップ 既定スタイル（工房ハウススタイル） === */
   /* すべてインライン。外部CSS/フォント/画像は禁止＝オフラインで遊べる契約 */
@@ -39,7 +39,7 @@
 <div id="hud"></div>
 <!-- リスタート必須: ゲームオーバー/クリア後に必ず「もう一回」を出す -->
 <div id="overlay">
-  <h1 id="title">🍉 スイカゲーム</h1>
+  <h1 id="title">🍉 おとして フルーツパズル</h1>
   <p id="desc">よこにタップして　はなすと　フルーツが　おちる！<br>おなじ　フルーツが　くっつくと　おおきくなるよ🍒→🍓→🍇…→🍉</p>
   <button id="btn">スタート</button>
 </div>
@@ -150,7 +150,7 @@ function frame(ts){
 }
 requestAnimationFrame(frame);
 
-// ============ スイカゲーム本体（円の物理＋同種マージ・外部依存ゼロ） ============
+// ============ フルーツパズル本体（円の物理＋同種マージ・外部依存ゼロ） ============
 // 使えるツール: drawSky/vignette/glow/groundShadow/burst/confetti/shake/numberPop
 //              lerp/easeOut/easeOutBack/rand/clamp/shade/roundRect
 

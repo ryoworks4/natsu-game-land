@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>あつまれ どうぶつの森</title>
+<title>なかよし どうぶつ村</title>
 <style>
   :root { --pop-red:#FF6B6B; --pop-yellow:#FFD93D; --pop-green:#6BCB77; --pop-blue:#4D96FF;
     --ink:#2b3a67; --paper:#F2F7FF; }
@@ -34,8 +34,8 @@
 <div id="wrap"><canvas id="c"></canvas></div>
 <div id="hud"></div>
 <div id="overlay">
-  <h1 id="title">🌳 あつまれ どうぶつの森</h1>
-  <p id="desc">木の実🍎・魚🐟・むし🦋・貝🐚 をタップ！<br>どうぶつにも話しかけよう。<br>3000ベルあつめてローンを返そう！</p>
+  <h1 id="title">🌳 なかよし どうぶつ村</h1>
+  <p id="desc">木の実🍎・魚🐟・むし🦋・貝🐚 をタップ！<br>どうぶつにも話しかけよう。<br>3000コインあつめて おみせを ひらこう！</p>
   <button id="btn">しまへ ゴー</button>
 </div>
 
@@ -116,7 +116,7 @@ function frame(ts){
 }
 requestAnimationFrame(frame);
 
-// ============ ここからゲーム固有：あつまれ どうぶつの森 ============
+// ============ ここからゲーム固有：なかよし どうぶつ村 ============
 const GOAL=3000;
 let bells=0;
 const player={x:0,y:0,tx:0,ty:0,bob:0,face:1};
@@ -205,8 +205,8 @@ function interact(o){
 
 function clearGame(){
   state='clear'; confetti(70); shake(8,.4);
-  title.textContent='🎉 ローン かんさい！';
-  desc.innerHTML=`${GOAL}ベル あつめたよ！<br>しまの どうぶつたちも おおよろこび♪<br>すごい たんけんかだね！`;
+  title.textContent='🎉 おみせ オープン！';
+  desc.innerHTML=`${GOAL}コイン あつめたよ！<br>しまの どうぶつたちも おおよろこび♪<br>すごい たんけんかだね！`;
   btn.textContent='もう一回';
   overlay.classList.remove('hide');
 }
@@ -480,8 +480,8 @@ function render(dt){
   vignette();
 
   const left=Math.max(0,GOAL-bells);
-  hud.textContent = state==='clear' ? `🔔 ${bells} ベル — クリア！`
-    : `🔔 ${bells} / ${GOAL}  （あと ${left}）`;
+  hud.textContent = state==='clear' ? `🪙 ${bells} コイン — クリア！`
+    : `🪙 ${bells} / ${GOAL}  （あと ${left}）`;
 }
 </script>
 </body>

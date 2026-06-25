@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>マイクラふう 一人称3D ぼうけん</title>
+<title>一人称3D ブロックぼうけん</title>
 <style>
   :root { --pop-yellow:#FFD93D; --ink:#2b3a67; }
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
@@ -106,7 +106,7 @@ const stickEl=document.getElementById('stick'), knobEl=document.getElementById('
 
 let gl=cv.getContext('webgl',{antialias:false}) || cv.getContext('experimental-webgl');
 if(!gl){ overlay.innerHTML='<h1>3Dひょうじに たいおうして いません</h1>'+
-  '<p>このブラウザでは あそべません。<br>2Dばん の マイクラを あそんでください。</p>'; }
+  '<p>このブラウザでは あそべません。<br>2Dばん の ブロックゲーム を あそんでください。</p>'; }
 
 // ====================== 行列（4x4・列優先）======================
 const M4={
